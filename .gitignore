@@ -1,0 +1,7 @@
+#Zig
+zig-out/
+.zig-cache/
+
+#JetBrains
+.idea/
+
