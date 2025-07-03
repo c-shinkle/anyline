@@ -45,23 +45,23 @@ pub fn main() !void {
 
     try ansi_term.clear.clearScreen(stdout_writer);
 
-    line_loop: while (true) {
+    while (true) {
         try cursor.setCursorRow(stdout_writer, row);
         try cursor.setCursorColumn(stdout_writer, col_offset);
         try stdout_writer.writeAll(prompt);
 
         var line_buffer: std.ArrayListUnmanaged(u8) = .empty;
         try history_buffer.append(arena, line_buffer.items);
-        byte_loop: while (true) {
+        while (true) {
             switch (try stdin_reader.readByte()) {
-                control_code.eot => break :line_loop,
+                control_code.eot => return,
                 control_code.lf => {
                     const finished_line = try line_buffer.toOwnedSlice(arena);
                     history_buffer.items[history_buffer.items.len - 1] = finished_line;
                     row += 1;
                     col_offset = 0;
                     history_index = history_buffer.items.len;
-                    break :byte_loop;
+                    break;
                 },
                 control_code.esc => {
                     std.debug.assert('[' == try stdin_reader.readByte());
@@ -109,6 +109,13 @@ pub fn main() !void {
                         else => @panic("unhandled control byte"),
                     }
                 },
+                ' '...'~' => |print_byte| {
+                    try line_buffer.insert(arena, col_offset, print_byte);
+                    try stdout_writer.writeAll(line_buffer.items[col_offset..]);
+
+                    col_offset += 1;
+                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                },
                 control_code.del => {
                     if (col_offset == 0) {
                         continue;
@@ -120,20 +127,6 @@ pub fn main() !void {
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                     try stdout_writer.writeAll(line_buffer.items[col_offset..]);
                     try stdout_writer.writeByte(' ');
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
-                },
-                ' '...'~' => |print_byte| {
-                    try cursor.setCursorColumn(stdout_writer, prompt.len);
-                    try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-
-                    if (col_offset < line_buffer.items.len) {
-                        line_buffer.items[col_offset] = print_byte;
-                    } else {
-                        try line_buffer.append(arena, print_byte);
-                    }
-
-                    col_offset += 1;
-                    try stdout_writer.writeAll(line_buffer.items);
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
                 else => |byte| try stderr_writer.print("Unhandled character: {c}\n", .{byte}),
