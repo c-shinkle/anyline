@@ -36,14 +36,19 @@ pub fn main() !void {
     var arena_allocator = std.heap.ArenaAllocator.init(child_allocator);
     defer arena_allocator.deinit();
 
-    var row: usize = 0;
+    const arena = arena_allocator.allocator();
+    var row = row: {
+        try stdout_writer.print("\x1B[6n", .{});
+        const buffer = try stdin_reader.readUntilDelimiterAlloc(arena, 'R', 1024);
+        std.debug.assert(control_code.esc == buffer[0]);
+        std.debug.assert('[' == buffer[1]);
+        const row_end_index = std.mem.indexOf(u8, buffer, ";").?;
+        break :row try std.fmt.parseInt(usize, buffer[2..row_end_index], 10) -| 1;
+    };
     var col_offset: usize = 0;
     var history_index: usize = 0;
     const prompt = ">> ";
-    const arena = arena_allocator.allocator();
     var history_buffer: std.ArrayListUnmanaged([]const u8) = .empty;
-
-    try ansi_term.clear.clearScreen(stdout_writer);
 
     while (true) {
         try cursor.setCursorRow(stdout_writer, row);
