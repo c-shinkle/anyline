@@ -2,33 +2,16 @@ pub fn main() !void {
     const stdout_writer = std.io.getStdOut().writer();
     const stderr_writer = std.io.getStdErr().writer();
     const stdin_reader = std.io.getStdIn().reader();
-    const stdin_handle = std.io.getStdIn().handle;
 
-    var old = old: {
-        var temp: termios.termios = undefined;
-        if (termios.tcgetattr(stdin_handle, &temp) < 0) {
-            const errno_val = std.c._errno().*;
-            const errno_string = string.strerror(errno_val);
-            try stderr_writer.print("{s}\n", .{errno_string});
-            return;
-        }
-
-        var new = temp;
-        const ICANON = @as(c_uint, termios.ICANON);
-        const ECHO = @as(c_uint, termios.ECHO);
-        new.c_lflag &= ~(ICANON | ECHO);
-        if (termios.tcsetattr(stdin_handle, termios.TCSANOW, &new) < 0) {
-            const errno_val = std.c._errno().*;
-            const errno_string = string.strerror(errno_val);
-            try stderr_writer.print("{s}\n", .{errno_string});
-            return;
-        }
-        break :old temp;
+    const old = switch (builtin.os.tag) {
+        .linux => try Linux.init(),
+        .windows => try Windows.init(),
+        else => unreachable,
     };
-    defer if (termios.tcsetattr(stdin_handle, termios.TCSANOW, &old) < 0) {
-        const errno_val = std.c._errno().*;
-        const errno_string = string.strerror(errno_val);
-        stderr_writer.print("{s}\n", .{errno_string}) catch {};
+    defer switch (builtin.os.tag) {
+        .linux => old.deinit(),
+        .windows => old.deinit(),
+        else => unreachable,
     };
 
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -48,19 +31,35 @@ pub fn main() !void {
     var col_offset: usize = 0;
     var history_index: usize = 0;
     const prompt = ">> ";
+    const console_input = std.io.getStdIn().handle;
     var history_buffer: std.ArrayListUnmanaged([]const u8) = .empty;
 
     while (true) {
         try cursor.setCursorRow(stdout_writer, row);
         try cursor.setCursorColumn(stdout_writer, col_offset);
         try stdout_writer.writeAll(prompt);
+        if (builtin.os.tag == .windows) {
+            if (0 == windows_c.FlushConsoleInputBuffer(console_input)) {
+                return error.SetConsoleModeFailure;
+            }
+        }
 
         var line_buffer: std.ArrayListUnmanaged(u8) = .empty;
         try history_buffer.append(arena, line_buffer.items);
         while (true) {
-            switch (try stdin_reader.readByte()) {
+            const first_byte = try stdin_reader.readByte();
+            switch (first_byte) {
                 control_code.eot => return,
                 control_code.lf => {
+                    const finished_line = try line_buffer.toOwnedSlice(arena);
+                    history_buffer.items[history_buffer.items.len - 1] = finished_line;
+                    row += 1;
+                    col_offset = 0;
+                    history_index = history_buffer.items.len;
+                    break;
+                },
+                control_code.cr => {
+                    std.debug.assert(builtin.os.tag == .windows);
                     const finished_line = try line_buffer.toOwnedSlice(arena);
                     history_buffer.items[history_buffer.items.len - 1] = finished_line;
                     row += 1;
@@ -111,7 +110,10 @@ pub fn main() !void {
                             col_offset -|= 1;
                             try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                         },
-                        else => @panic("unhandled control byte"),
+                        else => {
+                            std.debug.print("unhandled control byte: {d}\n", .{third_byte});
+                            unreachable;
+                        },
                     }
                 },
                 ' '...'~' => |print_byte| {
@@ -134,18 +136,20 @@ pub fn main() !void {
                     try stdout_writer.writeByte(' ');
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                else => |byte| try stderr_writer.print("Unhandled character: {c}\n", .{byte}),
+                else => |unknown_byte| try stderr_writer.print("Unhandled character: {d}\n", .{unknown_byte}),
             }
         }
     }
 }
 
 const std = @import("std");
+const builtin = @import("builtin");
 const control_code = std.ascii.control_code;
 
 const ansi_term = @import("ansi_term");
 const cursor = ansi_term.cursor;
 
-const string = @cImport(@cInclude("string.h"));
-const termios = @cImport(@cInclude("termios.h"));
-// const errno = @cImport(@cInclude("errno.h"));
+const Linux = @import("Linux.zig");
+const Windows = @import("Windows.zig");
+
+const windows_c = @cImport(@cInclude("windows.h"));
