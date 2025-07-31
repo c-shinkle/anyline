@@ -28,7 +28,6 @@ pub fn main() !void {
         const row_end_index = std.mem.indexOf(u8, buffer, ";").?;
         break :row try std.fmt.parseInt(usize, buffer[2..row_end_index], 10) -| 1;
     };
-    var col_offset: usize = 0;
     var history_index: usize = 0;
     const prompt = ">> ";
     const console_input = std.io.getStdIn().handle;
@@ -36,16 +35,18 @@ pub fn main() !void {
 
     while (true) {
         try cursor.setCursorRow(stdout_writer, row);
-        try cursor.setCursorColumn(stdout_writer, col_offset);
+        try cursor.setCursorColumn(stdout_writer, 0);
         try stdout_writer.writeAll(prompt);
         if (builtin.os.tag == .windows) {
             if (0 == windows_c.FlushConsoleInputBuffer(console_input)) {
                 return error.SetConsoleModeFailure;
             }
         }
+
+        var col_offset: usize = 0;
         var line_buffer: std.ArrayListUnmanaged(u8) = .empty;
-        // TODO can this be undefined? Or, even better, just not needed at all??
-        try history_entries.append(arena, HistoryEntry{ .line = "", .edit_stack = .empty });
+        // This dummy value guarentees there will always be an element at 'history_index'
+        try history_entries.append(arena, undefined);
         var edit_stack: std.ArrayListUnmanaged([]const u8) = .empty;
 
         while (true) {
@@ -74,25 +75,15 @@ pub fn main() !void {
                     col_offset = @min(col_offset + 1, line_buffer.items.len);
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                control_code.lf => { // ENTER
-                    // TODO should I clean up memory even if I'm using arena?
-                    history_entries.items[history_index].edit_stack = .empty;
+                control_code.lf, control_code.cr => { // ENTER
+                    history_entries.items[history_index].edit_stack.clearRetainingCapacity();
 
                     const finished_line = try line_buffer.toOwnedSlice(arena);
                     history_entries.items[history_entries.items.len - 1].line = finished_line;
-                    // TODO should I clean up memory even if I'm using arena?
-                    history_entries.items[history_entries.items.len - 1].edit_stack = .empty;
+
+                    history_entries.items[history_entries.items.len - 1].edit_stack
+                        .clearRetainingCapacity();
                     row += 1;
-                    col_offset = 0;
-                    history_index = history_entries.items.len;
-                    break;
-                },
-                control_code.cr => { // ENTER
-                    const finished_line = try line_buffer.toOwnedSlice(arena);
-                    history_entries.items[history_index].line = finished_line;
-                    history_entries.items[history_index].edit_stack = edit_stack;
-                    row += 1;
-                    col_offset = 0;
                     history_index = history_entries.items.len;
                     break;
                 },
@@ -106,14 +97,14 @@ pub fn main() !void {
                             }
 
                             if (history_index + 1 == history_entries.items.len) {
-                                // TODO test me thoroughly
                                 const finished_line = try line_buffer.toOwnedSlice(arena);
                                 history_entries.items[history_index].line = finished_line;
-                                history_entries.items[history_index].edit_stack = edit_stack;
                             }
+                            history_entries.items[history_index].edit_stack = edit_stack;
+
                             history_index -|= 1;
+
                             line_buffer.clearRetainingCapacity();
-                            // TODO test me thoroughly
                             try line_buffer.appendSlice(
                                 arena,
                                 history_entries.items[history_index].line,
@@ -130,9 +121,10 @@ pub fn main() !void {
                                 continue;
                             }
 
+                            history_entries.items[history_index].edit_stack = edit_stack;
                             history_index += 1;
+
                             line_buffer.clearRetainingCapacity();
-                            // TODO test me thoroughtly
                             try line_buffer.appendSlice(
                                 arena,
                                 history_entries.items[history_index].line,
