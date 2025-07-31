@@ -18,8 +18,8 @@ pub fn main() !void {
     const child_allocator = gpa.allocator();
     var arena_allocator = std.heap.ArenaAllocator.init(child_allocator);
     defer arena_allocator.deinit();
-
     const arena = arena_allocator.allocator();
+
     var row = row: {
         try stdout_writer.print("\x1B[6n", .{});
         const buffer = try stdin_reader.readUntilDelimiterAlloc(arena, 'R', 1024);
@@ -32,7 +32,7 @@ pub fn main() !void {
     var history_index: usize = 0;
     const prompt = ">> ";
     const console_input = std.io.getStdIn().handle;
-    var history_buffer: std.ArrayListUnmanaged([]const u8) = .empty;
+    var history_entries: std.ArrayListUnmanaged(HistoryEntry) = .empty;
 
     while (true) {
         try cursor.setCursorRow(stdout_writer, row);
@@ -43,28 +43,57 @@ pub fn main() !void {
                 return error.SetConsoleModeFailure;
             }
         }
-
         var line_buffer: std.ArrayListUnmanaged(u8) = .empty;
-        try history_buffer.append(arena, line_buffer.items);
+        // TODO can this be undefined? Or, even better, just not needed at all??
+        try history_entries.append(arena, HistoryEntry{ .line = "", .edit_stack = .empty });
+        var edit_stack: std.ArrayListUnmanaged([]const u8) = .empty;
+
         while (true) {
             const first_byte = try stdin_reader.readByte();
             switch (first_byte) {
-                control_code.eot => return,
-                control_code.lf => {
+                control_code.stx => { // CTRL + B
+                    col_offset -|= 1;
+                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                },
+                control_code.eot => { // CTRL + D
+                    if (line_buffer.items.len == 0) {
+                        return;
+                    }
+                    if (line_buffer.items.len == col_offset) {
+                        continue;
+                    }
+                    const line_buffer_before_edit_command = try arena.dupe(u8, line_buffer.items);
+                    try edit_stack.append(arena, line_buffer_before_edit_command);
+
+                    _ = line_buffer.orderedRemove(col_offset);
+                    try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                    try stdout_writer.writeAll(line_buffer.items[col_offset..]);
+                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                },
+                control_code.ack => { // CTRL + F
+                    col_offset = @min(col_offset + 1, line_buffer.items.len);
+                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                },
+                control_code.lf => { // ENTER
+                    // TODO should I clean up memory even if I'm using arena?
+                    history_entries.items[history_index].edit_stack = .empty;
+
                     const finished_line = try line_buffer.toOwnedSlice(arena);
-                    history_buffer.items[history_buffer.items.len - 1] = finished_line;
+                    history_entries.items[history_entries.items.len - 1].line = finished_line;
+                    // TODO should I clean up memory even if I'm using arena?
+                    history_entries.items[history_entries.items.len - 1].edit_stack = .empty;
                     row += 1;
                     col_offset = 0;
-                    history_index = history_buffer.items.len;
+                    history_index = history_entries.items.len;
                     break;
                 },
-                control_code.cr => {
-                    std.debug.assert(builtin.os.tag == .windows);
+                control_code.cr => { // ENTER
                     const finished_line = try line_buffer.toOwnedSlice(arena);
-                    history_buffer.items[history_buffer.items.len - 1] = finished_line;
+                    history_entries.items[history_index].line = finished_line;
+                    history_entries.items[history_index].edit_stack = edit_stack;
                     row += 1;
                     col_offset = 0;
-                    history_index = history_buffer.items.len;
+                    history_index = history_entries.items.len;
                     break;
                 },
                 control_code.esc => {
@@ -76,12 +105,20 @@ pub fn main() !void {
                                 continue;
                             }
 
-                            if (history_index + 1 == history_buffer.items.len) {
-                                history_buffer.items[history_index] = try line_buffer.toOwnedSlice(arena);
+                            if (history_index + 1 == history_entries.items.len) {
+                                // TODO test me thoroughly
+                                const finished_line = try line_buffer.toOwnedSlice(arena);
+                                history_entries.items[history_index].line = finished_line;
+                                history_entries.items[history_index].edit_stack = edit_stack;
                             }
                             history_index -|= 1;
                             line_buffer.clearRetainingCapacity();
-                            try line_buffer.appendSlice(arena, history_buffer.items[history_index]);
+                            // TODO test me thoroughly
+                            try line_buffer.appendSlice(
+                                arena,
+                                history_entries.items[history_index].line,
+                            );
+                            edit_stack = history_entries.items[history_index].edit_stack;
 
                             try cursor.setCursor(stdout_writer, prompt.len, row);
                             try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
@@ -89,13 +126,18 @@ pub fn main() !void {
                             col_offset = line_buffer.items.len;
                         },
                         'B' => { //Down
-                            if (history_index + 1 >= history_buffer.items.len) {
+                            if (history_index + 1 >= history_entries.items.len) {
                                 continue;
                             }
 
                             history_index += 1;
                             line_buffer.clearRetainingCapacity();
-                            try line_buffer.appendSlice(arena, history_buffer.items[history_index]);
+                            // TODO test me thoroughtly
+                            try line_buffer.appendSlice(
+                                arena,
+                                history_entries.items[history_index].line,
+                            );
+                            edit_stack = history_entries.items[history_index].edit_stack;
 
                             try cursor.setCursor(stdout_writer, prompt.len, row);
                             try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
@@ -111,10 +153,21 @@ pub fn main() !void {
                             try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                         },
                         else => {
-                            std.debug.print("unhandled control byte: {d}\n", .{third_byte});
-                            unreachable;
+                            std.debug.print("Unhandled control byte: {d}\n", .{third_byte});
                         },
                     }
+                },
+                control_code.us => { // Underscore
+                    if (edit_stack.items.len == 0) {
+                        continue;
+                    }
+                    line_buffer.clearRetainingCapacity();
+                    try line_buffer.appendSlice(arena, edit_stack.pop().?);
+
+                    try cursor.setCursor(stdout_writer, prompt.len, row);
+                    try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                    try stdout_writer.writeAll(line_buffer.items);
+                    col_offset = line_buffer.items.len;
                 },
                 ' '...'~' => |print_byte| {
                     try line_buffer.insert(arena, col_offset, print_byte);
@@ -129,6 +182,8 @@ pub fn main() !void {
                     }
 
                     col_offset -= 1;
+                    const copied_line = try arena.dupe(u8, line_buffer.items);
+                    try edit_stack.append(arena, copied_line);
                     _ = line_buffer.orderedRemove(col_offset);
 
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
@@ -136,11 +191,18 @@ pub fn main() !void {
                     try stdout_writer.writeByte(' ');
                     try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                else => |unknown_byte| try stderr_writer.print("Unhandled character: {d}\n", .{unknown_byte}),
+                else => |unknown_byte| try stderr_writer.print("Unhandled character: {d}\n", .{
+                    unknown_byte,
+                }),
             }
         }
     }
 }
+
+const HistoryEntry = struct {
+    line: []const u8,
+    edit_stack: std.ArrayListUnmanaged([]const u8),
+};
 
 const std = @import("std");
 const builtin = @import("builtin");
