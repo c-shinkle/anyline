@@ -14,7 +14,7 @@ pub fn main() !void {
         else => unreachable,
     };
 
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}).init;
     const child_allocator = gpa.allocator();
     var arena_allocator = std.heap.ArenaAllocator.init(child_allocator);
     defer arena_allocator.deinit();
@@ -26,7 +26,6 @@ pub fn main() !void {
     var history_entries = std.ArrayListUnmanaged(HistoryEntry).empty;
 
     while (true) : (try stdout_writer.writeByte('\n')) {
-        try cursor.setCursorColumn(stdout_writer, 0);
         try stdout_writer.writeAll(prompt);
         if (builtin.os.tag == .windows) {
             if (0 == windows_c.FlushConsoleInputBuffer(console_input)) {
@@ -69,11 +68,10 @@ pub fn main() !void {
                 control_code.lf, control_code.cr => { // ENTER
                     history_entries.items[history_index].edit_stack.clearRetainingCapacity();
 
-                    const finished_line = try line_buffer.toOwnedSlice(arena);
-                    history_entries.items[history_entries.items.len - 1].line = finished_line;
+                    var last_entry = &history_entries.items[history_entries.items.len - 1];
+                    last_entry.line = try line_buffer.toOwnedSlice(arena);
+                    last_entry.edit_stack.clearRetainingCapacity();
 
-                    history_entries.items[history_entries.items.len - 1].edit_stack
-                        .clearRetainingCapacity();
                     history_index = history_entries.items.len;
                     break;
                 },
@@ -158,6 +156,7 @@ pub fn main() !void {
                     if (edit_stack.items.len == 0) {
                         continue;
                     }
+
                     line_buffer.clearRetainingCapacity();
                     try line_buffer.appendSlice(arena, edit_stack.pop().?);
 
@@ -167,6 +166,14 @@ pub fn main() !void {
                     col_offset = line_buffer.items.len;
                 },
                 ' '...'~' => |print_byte| {
+                    // If you are editting a line that was populated from history,
+                    // then you need to include a backstop for undo's
+                    const is_last_entry = history_index + 1 == history_entries.items.len;
+                    if (!is_last_entry and edit_stack.items.len == 0) {
+                        const duped_finished_line = try arena.dupe(u8, line_buffer.items);
+                        try edit_stack.append(arena, duped_finished_line);
+                    }
+
                     try line_buffer.insert(arena, col_offset, print_byte);
                     try stdout_writer.writeAll(line_buffer.items[col_offset..]);
 
