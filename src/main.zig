@@ -6,7 +6,7 @@ pub fn main() !void {
     const old = switch (builtin.os.tag) {
         .linux => try Linux.init(),
         .windows => try Windows.init(),
-        else => unreachable,
+        else => return error.UnsupportedOS,
     };
     defer switch (builtin.os.tag) {
         .linux => old.deinit(),
@@ -42,11 +42,11 @@ pub fn main() !void {
         while (true) {
             const first_byte = try stdin_reader.readByte();
             switch (first_byte) {
-                control_code.stx => { // CTRL + B
+                CTRL_B => {
                     col_offset -|= 1;
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                control_code.eot => { // CTRL + D
+                CTRL_D => {
                     if (line_buffer.items.len == 0) {
                         return;
                     }
@@ -57,13 +57,13 @@ pub fn main() !void {
                     try edit_stack.append(arena, edited_line);
 
                     _ = line_buffer.orderedRemove(col_offset);
-                    try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                    try clearFromCursorToLineEnd(stdout_writer);
                     try stdout_writer.writeAll(line_buffer.items[col_offset..]);
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                control_code.ack => { // CTRL + F
+                CTRL_F => {
                     col_offset = @min(col_offset + 1, line_buffer.items.len);
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
                 control_code.lf, control_code.cr => { // ENTER
                     history_entries.items[history_index].edit_stack.clearRetainingCapacity();
@@ -79,7 +79,7 @@ pub fn main() !void {
                     std.debug.assert('[' == try stdin_reader.readByte());
                     const third_byte = try stdin_reader.readByte();
                     switch (third_byte) {
-                        'A' => { //Up
+                        UP_ARROW => {
                             if (history_index == 0) {
                                 continue;
                             }
@@ -99,12 +99,12 @@ pub fn main() !void {
                             );
                             edit_stack = history_entries.items[history_index].edit_stack;
 
-                            try cursor.setCursorColumn(stdout_writer, prompt.len);
-                            try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                            try setCursorColumn(stdout_writer, prompt.len);
+                            try clearFromCursorToLineEnd(stdout_writer);
                             try stdout_writer.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
-                        'B' => { //Down
+                        DOWN_ARROW => {
                             if (history_index + 1 >= history_entries.items.len) {
                                 continue;
                             }
@@ -119,20 +119,20 @@ pub fn main() !void {
                             );
                             edit_stack = history_entries.items[history_index].edit_stack;
 
-                            try cursor.setCursorColumn(stdout_writer, prompt.len);
-                            try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                            try setCursorColumn(stdout_writer, prompt.len);
+                            try clearFromCursorToLineEnd(stdout_writer);
                             try stdout_writer.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
-                        'C' => { //Right
+                        RIGHT_ARROW => {
                             col_offset = @min(col_offset + 1, line_buffer.items.len);
-                            try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                            try setCursorColumn(stdout_writer, prompt.len + col_offset);
                         },
-                        'D' => { //Left
+                        LEFT_ARROW => {
                             col_offset -|= 1;
-                            try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                            try setCursorColumn(stdout_writer, prompt.len + col_offset);
                         },
-                        '3' => {
+                        DEL => {
                             std.debug.assert('~' == try stdin_reader.readByte());
 
                             if (line_buffer.items.len == col_offset) {
@@ -143,16 +143,16 @@ pub fn main() !void {
                             try edit_stack.append(arena, edited_line);
 
                             _ = line_buffer.orderedRemove(col_offset);
-                            try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                            try clearFromCursorToLineEnd(stdout_writer);
                             try stdout_writer.writeAll(line_buffer.items[col_offset..]);
-                            try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                            try setCursorColumn(stdout_writer, prompt.len + col_offset);
                         },
                         else => {
                             std.debug.print("Unhandled control byte: {d}\n", .{third_byte});
                         },
                     }
                 },
-                control_code.us => { // Underscore
+                UNDERLINE => {
                     if (edit_stack.items.len == 0) {
                         continue;
                     }
@@ -160,8 +160,8 @@ pub fn main() !void {
                     line_buffer.clearRetainingCapacity();
                     try line_buffer.appendSlice(arena, edit_stack.pop().?);
 
-                    try cursor.setCursorColumn(stdout_writer, prompt.len);
-                    try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                    try setCursorColumn(stdout_writer, prompt.len);
+                    try clearFromCursorToLineEnd(stdout_writer);
                     try stdout_writer.writeAll(line_buffer.items);
                     col_offset = line_buffer.items.len;
                 },
@@ -178,9 +178,9 @@ pub fn main() !void {
                     try stdout_writer.writeAll(line_buffer.items[col_offset..]);
 
                     col_offset += 1;
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
-                control_code.del => {
+                BACK_SPACE => {
                     if (col_offset == 0) {
                         continue;
                     }
@@ -190,10 +190,10 @@ pub fn main() !void {
                     col_offset -= 1;
                     _ = line_buffer.orderedRemove(col_offset);
 
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                     try stdout_writer.writeAll(line_buffer.items[col_offset..]);
                     try stdout_writer.writeByte(' ');
-                    try cursor.setCursorColumn(stdout_writer, prompt.len + col_offset);
+                    try setCursorColumn(stdout_writer, prompt.len + col_offset);
                 },
                 else => |unknown_byte| try stderr_writer.print("Unhandled character: {d}\n", .{
                     unknown_byte,
@@ -208,12 +208,24 @@ const HistoryEntry = struct {
     edit_stack: std.ArrayListUnmanaged([]const u8),
 };
 
+const CTRL_B = 0x02;
+const CTRL_D = 0x04;
+const CTRL_F = 0x06;
+const UP_ARROW = 'A';
+const DOWN_ARROW = 'B';
+const RIGHT_ARROW = 'C';
+const LEFT_ARROW = 'D';
+const DEL = '3';
+const UNDERLINE = 0x1F;
+const BACK_SPACE = 0x7F;
+
 const std = @import("std");
 const builtin = @import("builtin");
 const control_code = std.ascii.control_code;
 
 const ansi_term = @import("ansi_term");
-const cursor = ansi_term.cursor;
+const setCursorColumn = ansi_term.cursor.setCursorColumn;
+const clearFromCursorToLineEnd = ansi_term.clear.clearFromCursorToLineEnd;
 
 const Linux = @import("Linux.zig");
 const Windows = @import("Windows.zig");
