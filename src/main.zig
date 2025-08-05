@@ -3,10 +3,18 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const child_allocator = gpa.allocator();
 
-    const line = try anyline.readline(child_allocator, ">> ");
-    defer child_allocator.free(line);
+    anyline.using_history();
 
-    std.debug.print("\n{s}\n", .{line});
+    var i: u8 = 0;
+    while (i < 5) : (i += 1) {
+        const line = try anyline.readline(child_allocator, ">> ");
+        defer child_allocator.free(line);
+        try anyline.add_history(child_allocator, line);
+    }
+
+    std.debug.print("5 items added to history\n", .{});
+
+    try anyline.write_history(child_allocator, "my_history_file");
 }
 
 const std = @import("std");

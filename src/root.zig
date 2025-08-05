@@ -1,13 +1,18 @@
 pub fn readline(child_allocator: std.mem.Allocator, prompt: []const u8) ![]const u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
-    // This dummy value guarentees there will always be an element at 'history_index'
-    // try history_entries.append(arena, undefined);
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
 
     var arena_allocator = std.heap.ArenaAllocator.init(child_allocator);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
+
+    // TODO is this still needed now that add_history is a thing?
+    if (is_using_history) {
+        // This dummy value guarentees there will always be an element at 'history_index'
+        try history_entries.append(child_allocator, undefined);
+    }
+    var history_index: usize = history_entries.items.len;
 
     const old = switch (builtin.os.tag) {
         .linux => try Linux.init(),
@@ -59,64 +64,62 @@ pub fn readline(child_allocator: std.mem.Allocator, prompt: []const u8) ![]const
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             control_code.lf, control_code.cr => { // ENTER
-                // history_entries.items[history_index].edit_stack.clearRetainingCapacity();
-
-                // var last_entry = &history_entries.items[history_entries.items.len - 1];
-                // last_entry.line = try line_buffer.toOwnedSlice(arena);
-                // last_entry.edit_stack.clearRetainingCapacity();
-
-                // history_index = history_entries.items.len;
+                try stdout_writer.writeByte('\n');
                 break;
             },
             control_code.esc => {
                 std.debug.assert('[' == try stdin_reader.readByte());
                 const third_byte = try stdin_reader.readByte();
                 switch (third_byte) {
-                    // UP_ARROW => {
-                    //     if (history_index == 0) {
-                    //         continue;
-                    //     }
-                    //
-                    //     if (history_index + 1 == history_entries.items.len) {
-                    //         const finished_line = try line_buffer.toOwnedSlice(arena);
-                    //         history_entries.items[history_index].line = finished_line;
-                    //     }
-                    //     history_entries.items[history_index].edit_stack = edit_stack;
-                    //
-                    //     history_index -|= 1;
-                    //
-                    //     line_buffer.clearRetainingCapacity();
-                    //     try line_buffer.appendSlice(
-                    //         arena,
-                    //         history_entries.items[history_index].line,
-                    //     );
-                    //     edit_stack = history_entries.items[history_index].edit_stack;
-                    //
-                    //     try setCursorColumn(stdout_writer, prompt.len);
-                    //     try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-                    //     try stdout_writer.writeAll(line_buffer.items);
-                    //     col_offset = line_buffer.items.len;
-                    // },
-                    // DOWN_ARROW => {
-                    //     if (history_index + 1 >= history_entries.items.len) {
-                    //         continue;
-                    //     }
-                    //
-                    //     history_entries.items[history_index].edit_stack = edit_stack;
-                    //     history_index += 1;
-                    //
-                    //     line_buffer.clearRetainingCapacity();
-                    //     try line_buffer.appendSlice(
-                    //         arena,
-                    //         history_entries.items[history_index].line,
-                    //     );
-                    //     edit_stack = history_entries.items[history_index].edit_stack;
-                    //
-                    //     try setCursorColumn(stdout_writer, prompt.len);
-                    //     try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-                    //     try stdout_writer.writeAll(line_buffer.items);
-                    //     col_offset = line_buffer.items.len;
-                    // },
+                    UP_ARROW => {
+                        if (!is_using_history or history_index == 0) {
+                            continue;
+                        }
+
+                        if (history_index + 1 == history_entries.items.len) {
+                            const finished_line = try child_allocator.dupe(u8, line_buffer.items);
+                            history_entries.items[history_index].line = finished_line;
+                        }
+                        edit_stack.clearRetainingCapacity();
+                        // history_entries.items[history_index].edit_stack =
+                        //     try edit_stack.clone(child_allocator);
+
+                        history_index -|= 1;
+
+                        line_buffer.clearRetainingCapacity();
+                        try line_buffer.appendSlice(
+                            arena,
+                            history_entries.items[history_index].line,
+                        );
+                        // edit_stack = history_entries.items[history_index].edit_stack;
+
+                        try setCursorColumn(stdout_writer, prompt.len);
+                        try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                        try stdout_writer.writeAll(line_buffer.items);
+                        col_offset = line_buffer.items.len;
+                    },
+                    DOWN_ARROW => {
+                        if (!is_using_history or history_index + 1 >= history_entries.items.len) {
+                            continue;
+                        }
+
+                        edit_stack.clearRetainingCapacity();
+                        // history_entries.items[history_index].edit_stack = edit_stack;
+                        history_index += 1;
+
+                        line_buffer.clearRetainingCapacity();
+                        try line_buffer.appendSlice(
+                            arena,
+                            history_entries.items[history_index].line,
+                        );
+                        // edit_stack =
+                        //     try history_entries.items[history_index].edit_stack.clone(arena);
+
+                        try setCursorColumn(stdout_writer, prompt.len);
+                        try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                        try stdout_writer.writeAll(line_buffer.items);
+                        col_offset = line_buffer.items.len;
+                    },
                     RIGHT_ARROW => {
                         col_offset = @min(col_offset + 1, line_buffer.items.len);
                         try setCursorColumn(stdout_writer, prompt.len + col_offset);
@@ -145,7 +148,7 @@ pub fn readline(child_allocator: std.mem.Allocator, prompt: []const u8) ![]const
                     },
                 }
             },
-            UNDERLINE => {
+            UNDERSCORE => {
                 if (edit_stack.items.len == 0) {
                     continue;
                 }
@@ -156,16 +159,19 @@ pub fn readline(child_allocator: std.mem.Allocator, prompt: []const u8) ![]const
                 try setCursorColumn(stdout_writer, prompt.len);
                 try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
                 try stdout_writer.writeAll(line_buffer.items);
-                col_offset = line_buffer.items.len;
+                try setCursorColumn(stdout_writer, col_offset);
+                // col_offset = line_buffer.items.len;
             },
             ' '...'~' => |print_byte| {
-                // If you are editting a line that was populated from history,
-                // then you need to include a backstop for undo's
-                // const is_last_entry = history_index + 1 == history_entries.items.len;
-                // if (!is_last_entry and edit_stack.items.len == 0) {
-                //     const duped_finished_line = try arena.dupe(u8, line_buffer.items);
-                //     try edit_stack.append(arena, duped_finished_line);
-                // }
+                if (is_using_history) {
+                    // If you are editting a line that was populated from history,
+                    // then you need to include a backstop for undo's
+                    const is_last_entry = history_index + 1 == history_entries.items.len;
+                    if (!is_last_entry and edit_stack.items.len == 0) {
+                        const duped_finished_line = try arena.dupe(u8, line_buffer.items);
+                        try edit_stack.append(arena, duped_finished_line);
+                    }
+                }
 
                 try line_buffer.insert(arena, col_offset, print_byte);
                 try stdout_writer.writeAll(line_buffer.items[col_offset..]);
@@ -197,6 +203,35 @@ pub fn readline(child_allocator: std.mem.Allocator, prompt: []const u8) ![]const
     return try child_allocator.dupe(u8, line_buffer.items);
 }
 
+var is_using_history: bool = false;
+
+const HistoryEntry = struct {
+    line: []const u8,
+    // edit_stack: std.ArrayListUnmanaged([]const u8),
+};
+var history_entries = std.ArrayListUnmanaged(HistoryEntry).empty;
+
+pub fn using_history() void {
+    is_using_history = true;
+}
+
+pub fn add_history(allocator: std.mem.Allocator, line: []const u8) !void {
+    is_using_history = true;
+
+    var last_entry = &history_entries.items[history_entries.items.len - 1];
+    last_entry.line = try allocator.dupe(u8, line);
+    // last_entry.edit_stack.clearRetainingCapacity();
+}
+
+pub fn write_history(allocator: std.mem.Allocator, _: []const u8) !void {
+    // TODO impl. me!
+    for (history_entries.items) |*entry| {
+        allocator.free(entry.line);
+    }
+    history_entries.deinit(allocator);
+    history_entries = .empty;
+}
+
 const CTRL_B = 0x02;
 const CTRL_D = 0x04;
 const CTRL_F = 0x06;
@@ -205,7 +240,7 @@ const DOWN_ARROW = 'B';
 const RIGHT_ARROW = 'C';
 const LEFT_ARROW = 'D';
 const DEL = '3';
-const UNDERLINE = 0x1F;
+const UNDERSCORE = 0x1F;
 const BACK_SPACE = 0x7F;
 
 const std = @import("std");
