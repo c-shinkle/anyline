@@ -7,7 +7,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
 
-    try history_entries.append(outlive_allocator, undefined);
+    try history_entries.append(outlive_allocator, "");
     errdefer _ = history_entries.pop();
     var history_index: usize = history_entries.items.len - 1;
 
@@ -42,6 +42,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             CTRL_D => {
+                try log(
+                    arena,
+                    "line_buffer.items.len == {d}",
+                    .{line_buffer.items.len},
+                    stdout_writer,
+                    prompt.len + col_offset,
+                );
                 if (line_buffer.items.len == 0) {
                     try stdout_writer.writeByte('\n');
                     break;
@@ -53,8 +60,9 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try edit_stack.append(arena, edited_line);
 
                 _ = line_buffer.orderedRemove(col_offset);
-                try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
+                // try clearFromCursorToLineEnd(stdout_writer);
                 try stdout_writer.writeAll(line_buffer.items[col_offset..]);
+                try stdout_writer.writeByte(' ');
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             CTRL_F => {
@@ -75,21 +83,18 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                         }
 
                         if (history_index + 1 == history_entries.items.len) {
-                            const finished_line = try outlive_allocator.dupe(u8, line_buffer.items);
-                            history_entries.items[history_index].line = finished_line;
+                            history_entries.items[history_index] =
+                                try outlive_allocator.dupe(u8, line_buffer.items);
                         }
                         edit_stack.clearRetainingCapacity();
-                        // history_entries.items[history_index].edit_stack =
-                        //     try edit_stack.clone(child_allocator);
 
-                        history_index -|= 1;
+                        history_index -= 1;
 
                         line_buffer.clearRetainingCapacity();
                         try line_buffer.appendSlice(
                             arena,
-                            history_entries.items[history_index].line,
+                            history_entries.items[history_index],
                         );
-                        // edit_stack = history_entries.items[history_index].edit_stack;
 
                         try setCursorColumn(stdout_writer, prompt.len);
                         try clearFromCursorToLineEnd(stdout_writer);
@@ -102,16 +107,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                         }
 
                         edit_stack.clearRetainingCapacity();
-                        // history_entries.items[history_index].edit_stack = edit_stack;
                         history_index += 1;
 
                         line_buffer.clearRetainingCapacity();
                         try line_buffer.appendSlice(
                             arena,
-                            history_entries.items[history_index].line,
+                            history_entries.items[history_index],
                         );
-                        // edit_stack =
-                        //     try history_entries.items[history_index].edit_stack.clone(arena);
 
                         try setCursorColumn(stdout_writer, prompt.len);
                         try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
@@ -158,7 +160,6 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
                 try stdout_writer.writeAll(line_buffer.items);
                 try setCursorColumn(stdout_writer, col_offset);
-                // col_offset = line_buffer.items.len;
             },
             ' '...'~' => |print_byte| {
                 // If you are editting a line that was populated from history,
@@ -200,39 +201,27 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
 }
 
 var is_using_history: bool = false;
-
-const HistoryEntry = struct {
-    line: []const u8,
-    // edit_stack: std.ArrayListUnmanaged([]const u8),
-};
-var history_entries = std.ArrayListUnmanaged(HistoryEntry).empty;
+var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 
 pub fn using_history() void {
     is_using_history = true;
 }
 
 pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
-    var last_entry = &history_entries.items[history_entries.items.len - 1];
-    last_entry.line = try alloc.dupe(u8, line);
-    // last_entry.edit_stack.clearRetainingCapacity();
+    history_entries.items[history_entries.items.len - 1] = try alloc.dupe(u8, line);
 }
 
 pub fn write_history(alloc: std.mem.Allocator, filename: []const u8) !void {
     var file = try std.fs.createFileAbsolute(filename, .{});
     defer file.close();
 
-    var offset: usize = 0;
-    for (history_entries.items) |*entry| {
-        try file.pwriteAll(entry.line, offset);
-        offset += entry.line.len;
+    const all_entries = try std.mem.join(alloc, "\n", history_entries.items);
+    defer alloc.free(all_entries);
+    try file.writeAll(all_entries);
 
-        try file.pwriteAll(&[1]u8{'\n'}, offset);
-        offset += 1;
-
-        alloc.free(entry.line);
+    for (history_entries.items) |entry| {
+        alloc.free(entry);
     }
-    try file.setEndPos(offset - 1);
-
     history_entries.deinit(alloc);
     history_entries = .empty;
 }
@@ -249,8 +238,22 @@ pub fn read_history(alloc: std.mem.Allocator, filename: []const u8) !void {
     var iterator = std.mem.tokenizeScalar(u8, data, '\n');
     while (iterator.next()) |line| {
         const duped_line = try alloc.dupe(u8, line);
-        try history_entries.append(alloc, HistoryEntry{ .line = duped_line });
+        try history_entries.append(alloc, duped_line);
     }
+}
+
+fn log(
+    arena: std.mem.Allocator,
+    comptime fmt: []const u8,
+    args: anytype,
+    stdout_writer: std.fs.File.Writer,
+    col: usize,
+) !void {
+    const max_rows = 100;
+    const msg = try std.fmt.allocPrint(arena, fmt, args);
+    try setCursorColumn(stdout_writer, max_rows - msg.len);
+    try stdout_writer.writeAll(msg);
+    try setCursorColumn(stdout_writer, col);
 }
 
 const CTRL_B = 0x02;
