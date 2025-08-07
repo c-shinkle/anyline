@@ -1,20 +1,24 @@
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
-    const child_allocator = gpa.allocator();
+    const outlive_allocator = gpa.allocator();
 
     anyline.using_history();
 
-    try anyline.add_history(child_allocator, "foobar");
+    const filename = try findHistoryPath(outlive_allocator);
+    defer outlive_allocator.free(filename);
+    try anyline.read_history(outlive_allocator, filename);
 
-    const filename = try findHistoryPath(child_allocator);
-    defer child_allocator.free(filename);
-    try anyline.read_history(child_allocator, filename);
+    while (true) {
+        const line = try anyline.readline(outlive_allocator, ">> ");
+        defer outlive_allocator.free(line);
 
-    const temp = try anyline.readline(child_allocator, ">> ");
-    defer child_allocator.free(temp);
+        if (std.mem.eql(u8, line, ".exit")) break;
 
-    try anyline.write_history(child_allocator, filename);
+        try anyline.add_history(outlive_allocator, line);
+    }
+
+    try anyline.write_history(outlive_allocator, filename);
 }
 
 fn findHistoryPath(alloc: std.mem.Allocator) ![]const u8 {

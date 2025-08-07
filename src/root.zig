@@ -144,7 +144,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                         try setCursorColumn(stdout_writer, prompt.len + col_offset);
                     },
                     else => {
-                        std.debug.print("Unhandled control byte: {d}\n", .{third_byte});
+                        try stderr_writer.print("Unhandled control byte: {d}\n", .{third_byte});
                     },
                 }
             },
