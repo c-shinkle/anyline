@@ -4,18 +4,15 @@ pub fn main() !void {
     const child_allocator = gpa.allocator();
 
     anyline.using_history();
+
+    try anyline.add_history(child_allocator, "foobar");
+
     const filename = try findHistoryPath(child_allocator);
     defer child_allocator.free(filename);
     try anyline.read_history(child_allocator, filename);
 
-    var i: u8 = 0;
-    while (i < 5) : (i += 1) {
-        const line = try anyline.readline(child_allocator, ">> ");
-        defer child_allocator.free(line);
-        try anyline.add_history(child_allocator, line);
-    }
-
-    std.debug.print("5 items added to history\n", .{});
+    const temp = try anyline.readline(child_allocator, ">> ");
+    defer child_allocator.free(temp);
 
     try anyline.write_history(child_allocator, filename);
 }

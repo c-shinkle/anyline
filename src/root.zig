@@ -8,7 +8,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     const arena = arena_allocator.allocator();
 
     try history_entries.append(outlive_allocator, "");
-    errdefer _ = history_entries.pop();
+    defer _ = history_entries.pop();
     var history_index: usize = history_entries.items.len - 1;
 
     const old = switch (builtin.os.tag) {
@@ -42,13 +42,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             CTRL_D => {
-                try log(
-                    arena,
-                    "line_buffer.items.len == {d}",
-                    .{line_buffer.items.len},
-                    stdout_writer,
-                    prompt.len + col_offset,
-                );
+                // try log(
+                //     arena,
+                //     "line_buffer.items.len == {d}",
+                //     .{line_buffer.items.len},
+                //     stdout_writer,
+                //     prompt.len + col_offset,
+                // );
                 if (line_buffer.items.len == 0) {
                     try stdout_writer.writeByte('\n');
                     break;
@@ -60,7 +60,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try edit_stack.append(arena, edited_line);
 
                 _ = line_buffer.orderedRemove(col_offset);
-                // try clearFromCursorToLineEnd(stdout_writer);
+
                 try stdout_writer.writeAll(line_buffer.items[col_offset..]);
                 try stdout_writer.writeByte(' ');
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
@@ -200,7 +200,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     return try outlive_allocator.dupe(u8, line_buffer.items);
 }
 
-var is_using_history: bool = false;
+var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 
 pub fn using_history() void {
@@ -208,7 +208,8 @@ pub fn using_history() void {
 }
 
 pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
-    history_entries.items[history_entries.items.len - 1] = try alloc.dupe(u8, line);
+    const duped_line = try alloc.dupe(u8, line);
+    try history_entries.append(alloc, duped_line);
 }
 
 pub fn write_history(alloc: std.mem.Allocator, filename: []const u8) !void {
