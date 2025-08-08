@@ -12,12 +12,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     var history_index: usize = history_entries.items.len - 1;
 
     const old = switch (builtin.os.tag) {
-        .linux => try Linux.init(),
+        .linux, .macos => try Linux.init(),
         .windows => try Windows.init(),
         else => return error.UnsupportedOS,
     };
     defer switch (builtin.os.tag) {
-        .linux => old.deinit(),
+        .linux, .macos => old.deinit(),
         .windows => old.deinit(),
         else => unreachable,
     };
@@ -42,13 +42,6 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             CTRL_D => {
-                // try log(
-                //     arena,
-                //     "line_buffer.items.len == {d}",
-                //     .{line_buffer.items.len},
-                //     stdout_writer,
-                //     prompt.len + col_offset,
-                // );
                 if (line_buffer.items.len == 0) {
                     try stdout_writer.writeByte('\n');
                     break;
@@ -156,10 +149,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 line_buffer.clearRetainingCapacity();
                 try line_buffer.appendSlice(arena, edit_stack.pop().?);
 
+                col_offset = @min(col_offset, line_buffer.items.len);
+
                 try setCursorColumn(stdout_writer, prompt.len);
                 try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
                 try stdout_writer.writeAll(line_buffer.items);
-                try setCursorColumn(stdout_writer, col_offset);
+                try setCursorColumn(stdout_writer, prompt.len + col_offset);
             },
             ' '...'~' => |print_byte| {
                 // If you are editting a line that was populated from history,

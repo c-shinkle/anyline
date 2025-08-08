@@ -23,7 +23,7 @@ pub fn main() !void {
 
 fn findHistoryPath(alloc: std.mem.Allocator) ![]const u8 {
     const home_path = switch (builtin.os.tag) {
-        .linux => try std.process.getEnvVarOwned(alloc, "HOME"),
+        .linux, .macos => try std.process.getEnvVarOwned(alloc, "HOME"),
         .windows => @panic("unimplemented!"),
         else => return error.UnsupportedOS,
     };
