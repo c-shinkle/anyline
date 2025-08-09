@@ -74,7 +74,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
 
                         if (history_index + 1 == history_entries.items.len) {
                             history_entries.items[history_index] =
-                                try outlive_allocator.dupe(u8, line_buffer.items);
+                                try arena.dupe(u8, line_buffer.items);
                         }
                         edit_stack.clearRetainingCapacity();
 
