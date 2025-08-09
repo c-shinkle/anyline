@@ -1,21 +1,21 @@
-original_output_mode: windows_c.DWORD,
-original_input_mode: windows_c.DWORD,
+output_mode: windows_c.DWORD,
+input_mode: windows_c.DWORD,
 
 pub fn init() !WindowsState {
     const h_out = std.io.getStdOut().handle;
     const h_in = std.io.getStdIn().handle;
 
-    var original_output_mode: windows_c.DWORD = 0;
-    var original_input_mode: windows_c.DWORD = 0;
-    if (0 == windows_c.GetConsoleMode(h_out, &original_output_mode)) {
+    var output_mode: windows_c.DWORD = 0;
+    var input_mode: windows_c.DWORD = 0;
+    if (0 == windows_c.GetConsoleMode(h_out, &output_mode)) {
         return error.InvalidHandle;
     }
-    if (0 == windows_c.GetConsoleMode(h_in, &original_input_mode)) {
+    if (0 == windows_c.GetConsoleMode(h_in, &input_mode)) {
         return error.InvalidHandle;
     }
 
     const requested_out_mode =
-        original_output_mode |
+        output_mode |
         windows_zig.ENABLE_VIRTUAL_TERMINAL_PROCESSING |
         windows_zig.DISABLE_NEWLINE_AUTO_RETURN;
     if (0 == windows_c.SetConsoleMode(h_out, requested_out_mode)) {
@@ -36,7 +36,7 @@ pub fn init() !WindowsState {
         _: u22 = undefined,
     };
 
-    var requested_in_mode: ConsoleInputMode = @bitCast(original_input_mode);
+    var requested_in_mode: ConsoleInputMode = @bitCast(input_mode);
     requested_in_mode.ENABLE_PROCESSED_INPUT = false;
     requested_in_mode.ENABLE_LINE_INPUT = false;
     requested_in_mode.ENABLE_ECHO_INPUT = false;
@@ -49,8 +49,8 @@ pub fn init() !WindowsState {
     }
 
     return WindowsState{
-        .original_output_mode = original_output_mode,
-        .original_input_mode = original_input_mode,
+        .output_mode = output_mode,
+        .input_mode = input_mode,
     };
 }
 
@@ -58,8 +58,8 @@ pub fn deinit(state: WindowsState) void {
     const h_out = std.io.getStdOut().handle;
     const h_in = std.io.getStdIn().handle;
 
-    _ = windows_c.SetConsoleMode(h_out, state.original_output_mode);
-    _ = windows_c.SetConsoleMode(h_in, state.original_input_mode);
+    _ = windows_c.SetConsoleMode(h_out, state.output_mode);
+    _ = windows_c.SetConsoleMode(h_in, state.input_mode);
 }
 
 const std = @import("std");

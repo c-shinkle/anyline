@@ -7,7 +7,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
 
-    try history_entries.append(outlive_allocator, "");
+    try history_entries.append(outlive_allocator, undefined);
     defer _ = history_entries.pop();
     var history_index: usize = history_entries.items.len - 1;
 
