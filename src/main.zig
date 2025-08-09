@@ -22,11 +22,11 @@ pub fn main() !void {
 }
 
 fn findHistoryPath(alloc: std.mem.Allocator) ![]const u8 {
-    const home_path = switch (builtin.os.tag) {
-        .linux, .macos => try std.process.getEnvVarOwned(alloc, "HOME"),
-        .windows => @panic("unimplemented!"),
+    const home_path = try std.process.getEnvVarOwned(alloc, switch (builtin.os.tag) {
+        .linux, .macos => "HOME",
+        .windows => "USERPROFILE",
         else => return error.UnsupportedOS,
-    };
+    });
     defer alloc.free(home_path);
 
     var home_dir = try std.fs.openDirAbsolute(home_path, std.fs.Dir.OpenOptions{});

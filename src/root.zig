@@ -26,13 +26,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     const stderr_writer = std.io.getStdErr().writer();
     const stdin_reader = std.io.getStdIn().reader();
 
+    // Windows needs the following two lines to prevent garbage writes to the terminal
+    try setCursorColumn(stdout_writer, 0);
+    try clearFromCursorToLineEnd(stdout_writer);
     try stdout_writer.writeAll(prompt);
-    if (builtin.os.tag == .windows) {
-        const console_input = std.io.getStdIn().handle;
-        if (0 == windows_c.FlushConsoleInputBuffer(console_input)) {
-            return error.SetConsoleModeFailure;
-        }
-    }
 
     while (true) {
         const first_byte = try stdin_reader.readByte();

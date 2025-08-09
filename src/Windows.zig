@@ -33,7 +33,7 @@ pub fn init() !WindowsState {
         ENABLE_EXTENDED_FLAGS: bool, // 0x0080
         ENABLE_AUTO_POSITION: bool, // 0x0100
         ENABLE_VIRTUAL_TERMINAL_INPUT: bool, // 0x0200
-        padding_bits: u22 = undefined,
+        _: u22 = undefined,
     };
 
     var requested_in_mode: ConsoleInputMode = @bitCast(original_input_mode);
