@@ -22,25 +22,35 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
         else => unreachable,
     };
 
-    const stdout_writer = std.io.getStdOut().writer();
-    const stderr_writer = std.io.getStdErr().writer();
-    const stdin_reader = std.io.getStdIn().reader();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    var stdin = std.fs.File.stdin();
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writerStreaming(&stderr_buffer);
+    var stderr = &stderr_writer.interface;
 
     // Windows needs the following two lines to prevent garbage writes to the terminal
-    try setCursorColumn(stdout_writer, 0);
-    try clearFromCursorToLineEnd(stdout_writer);
-    try stdout_writer.writeAll(prompt);
+    try setCursorColumn(stdout, 0);
+    try clearFromCursorToLineEnd(stdout);
+    try stdout.writeAll(prompt);
+    try stdout.flush();
 
-    while (true) {
-        const first_byte = try stdin_reader.readByte();
+    while (true) : (try stdout.flush()) {
+        var stdin_buffer: [4]u8 = undefined;
+        std.debug.assert(try stdin.read(&stdin_buffer) > 0);
+        const first_byte = stdin_buffer[0];
         switch (first_byte) {
             CTRL_B => {
                 col_offset -|= 1;
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_D => {
                 if (line_buffer.items.len == 0) {
-                    try stdout_writer.writeByte('\n');
+                    try stdout.writeByte('\n');
                     break;
                 }
                 if (line_buffer.items.len == col_offset) {
@@ -51,21 +61,21 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
 
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try stdout_writer.writeAll(line_buffer.items[col_offset..]);
-                try stdout_writer.writeByte(' ');
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeByte(' ');
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_F => {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             control_code.lf, control_code.cr => { // ENTER
-                try stdout_writer.writeByte('\n');
+                try stdout.writeByte('\n');
                 break;
             },
             control_code.esc => {
-                std.debug.assert('[' == try stdin_reader.readByte());
-                const third_byte = try stdin_reader.readByte();
+                std.debug.assert('[' == stdin_buffer[1]);
+                const third_byte = stdin_buffer[2];
                 switch (third_byte) {
                     UP_ARROW => {
                         if (!is_using_history or history_index == 0) {
@@ -86,9 +96,9 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                             history_entries.items[history_index],
                         );
 
-                        try setCursorColumn(stdout_writer, prompt.len);
-                        try clearFromCursorToLineEnd(stdout_writer);
-                        try stdout_writer.writeAll(line_buffer.items);
+                        try setCursorColumn(stdout, prompt.len);
+                        try clearFromCursorToLineEnd(stdout);
+                        try stdout.writeAll(line_buffer.items);
                         col_offset = line_buffer.items.len;
                     },
                     DOWN_ARROW => {
@@ -105,21 +115,21 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                             history_entries.items[history_index],
                         );
 
-                        try setCursorColumn(stdout_writer, prompt.len);
-                        try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-                        try stdout_writer.writeAll(line_buffer.items);
+                        try setCursorColumn(stdout, prompt.len);
+                        try clearFromCursorToLineEnd(stdout);
+                        try stdout.writeAll(line_buffer.items);
                         col_offset = line_buffer.items.len;
                     },
                     RIGHT_ARROW => {
                         col_offset = @min(col_offset + 1, line_buffer.items.len);
-                        try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                        try setCursorColumn(stdout, prompt.len + col_offset);
                     },
                     LEFT_ARROW => {
                         col_offset -|= 1;
-                        try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                        try setCursorColumn(stdout, prompt.len + col_offset);
                     },
                     DEL => {
-                        std.debug.assert('~' == try stdin_reader.readByte());
+                        std.debug.assert('~' == stdin_buffer[3]);
 
                         if (line_buffer.items.len == col_offset) {
                             continue;
@@ -129,12 +139,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                         try edit_stack.append(arena, edited_line);
 
                         _ = line_buffer.orderedRemove(col_offset);
-                        try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-                        try stdout_writer.writeAll(line_buffer.items[col_offset..]);
-                        try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                        try clearFromCursorToLineEnd(stdout);
+                        try stdout.writeAll(line_buffer.items[col_offset..]);
+                        try setCursorColumn(stdout, prompt.len + col_offset);
                     },
                     else => {
-                        try stderr_writer.print("Unhandled control byte: {d}\n", .{third_byte});
+                        try stderr.print("Unhandled control byte: {d}\n", .{third_byte});
                     },
                 }
             },
@@ -148,10 +158,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
 
                 col_offset = @min(col_offset, line_buffer.items.len);
 
-                try setCursorColumn(stdout_writer, prompt.len);
-                try ansi_term.clear.clearFromCursorToLineEnd(stdout_writer);
-                try stdout_writer.writeAll(line_buffer.items);
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len);
+                try clearFromCursorToLineEnd(stdout);
+                try stdout.writeAll(line_buffer.items);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             ' '...'~' => |print_byte| {
                 // If you are editting a line that was populated from history,
@@ -163,10 +173,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 }
 
                 try line_buffer.insert(arena, col_offset, print_byte);
-                try stdout_writer.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
 
                 col_offset += 1;
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             BACK_SPACE => {
                 if (col_offset == 0) {
@@ -178,12 +188,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                 col_offset -= 1;
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
-                try stdout_writer.writeAll(line_buffer.items[col_offset..]);
-                try stdout_writer.writeByte(' ');
-                try setCursorColumn(stdout_writer, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeByte(' ');
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
-            else => |unknown_byte| try stderr_writer.print("Unhandled character: {d}\n", .{
+            else => |unknown_byte| try stderr.print("Unhandled character: {d}\n", .{
                 unknown_byte,
             }),
         }
@@ -264,9 +274,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const control_code = std.ascii.control_code;
 
-const ansi_term = @import("ansi_term");
-const setCursorColumn = ansi_term.cursor.setCursorColumn;
-const clearFromCursorToLineEnd = ansi_term.clear.clearFromCursorToLineEnd;
+const esc = "\x1B";
+const csi = esc ++ "[";
+fn setCursorColumn(writer: *std.Io.Writer, column: usize) !void {
+    try writer.print(csi ++ "{}G", .{column + 1});
+}
+
+pub fn clearFromCursorToLineEnd(writer: *std.Io.Writer) !void {
+    try writer.writeAll(csi ++ "K");
+}
 
 const Linux = @import("Linux.zig");
 const Windows = @import("Windows.zig");

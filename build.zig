@@ -18,12 +18,12 @@ pub fn build(b: *std.Build) void {
         .use_llvm = !is_x86_64_linux,
     });
 
-    const ansi_term_dep = b.dependency("ansi_term", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    anyline_lib.root_module.addImport("ansi_term", ansi_term_dep.module("ansi_term"));
+    // const ansi_term_dep = b.dependency("ansi_term", .{
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    //
+    // anyline_lib.root_module.addImport("ansi_term", ansi_term_dep.module("ansi_term"));
     b.installArtifact(anyline_lib);
 
     const exe_mod = b.createModule(.{

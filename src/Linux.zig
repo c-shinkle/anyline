@@ -1,14 +1,17 @@
 old: termios.termios,
 
 pub fn init() !Linux {
-    const stderr_writer = std.io.getStdErr().writer();
-    const stdin_handle = std.io.getStdIn().handle;
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+
+    const stdin_handle = std.fs.File.stdin().handle;
 
     var old: termios.termios = undefined;
     if (termios.tcgetattr(stdin_handle, &old) < 0) {
         const errno_val = std.c._errno().*;
         const errno_string = string.strerror(errno_val);
-        try stderr_writer.print("{s}\n", .{errno_string});
+        try stderr.print("{s}\n", .{errno_string});
         return error.TerminosFailure;
     }
 
@@ -19,7 +22,7 @@ pub fn init() !Linux {
     if (termios.tcsetattr(stdin_handle, termios.TCSANOW, &new) < 0) {
         const errno_val = std.c._errno().*;
         const errno_string = string.strerror(errno_val);
-        try stderr_writer.print("{s}\n", .{errno_string});
+        try stderr.print("{s}\n", .{errno_string});
         return error.TerminosFailure;
     }
 
@@ -29,13 +32,15 @@ pub fn init() !Linux {
 }
 
 pub fn deinit(linux: Linux) void {
-    const stdin_handle = std.io.getStdIn().handle;
-    const stderr_writer = std.io.getStdErr().writer();
+    const stdin_handle = std.fs.File.stdin().handle;
 
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
     if (termios.tcsetattr(stdin_handle, termios.TCSANOW, &linux.old) < 0) {
         const errno_val = std.c._errno().*;
         const errno_string = string.strerror(errno_val);
-        stderr_writer.print("{s}\n", .{errno_string}) catch {};
+        stderr.print("{s}\n", .{errno_string}) catch {};
     }
 }
 
