@@ -22,15 +22,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
         else => unreachable,
     };
 
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
     var stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
     var stdin = std.fs.File.stdin();
 
-    var stderr_buffer: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writerStreaming(&stderr_buffer);
+    var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
     var stderr = &stderr_writer.interface;
 
     // Windows needs the following two lines to prevent garbage writes to the terminal
@@ -102,7 +100,8 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
                         col_offset = line_buffer.items.len;
                     },
                     DOWN_ARROW => {
-                        if (!is_using_history or history_index + 1 >= history_entries.items.len) {
+                        const is_last_entry = history_index + 1 == history_entries.items.len;
+                        if (!is_using_history or is_last_entry) {
                             continue;
                         }
 
