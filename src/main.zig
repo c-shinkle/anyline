@@ -21,7 +21,7 @@ pub fn main() !void {
     try anyline.write_history(outlive_allocator, filename);
 }
 
-fn findHistoryPath(alloc: std.mem.Allocator) ![]const u8 {
+fn findHistoryPath(alloc: std.mem.Allocator) ![:0]const u8 {
     const home_path = try std.process.getEnvVarOwned(alloc, switch (builtin.os.tag) {
         .linux, .macos => "HOME",
         .windows => "USERPROFILE",
@@ -42,7 +42,8 @@ fn findHistoryPath(alloc: std.mem.Allocator) ![]const u8 {
         else => return e,
     };
 
-    return try home_dir.realpathAlloc(alloc, file_name);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return alloc.dupeZ(u8, try home_dir.realpath(file_name, buf[0..]));
 }
 
 const std = @import("std");

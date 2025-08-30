@@ -1,7 +1,7 @@
-pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
+pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]const u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
-    var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
+    var edit_stack = std.ArrayListUnmanaged([:0]const u8).empty;
 
     var arena_allocator = std.heap.ArenaAllocator.init(outlive_allocator);
     defer arena_allocator.deinit();
@@ -54,7 +54,7 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
                 if (line_buffer.items.len == col_offset) {
                     continue;
                 }
-                const edited_line = try arena.dupe(u8, line_buffer.items);
+                const edited_line = try arena.dupeZ(u8, line_buffer.items);
                 try edit_stack.append(arena, edited_line);
 
                 _ = line_buffer.orderedRemove(col_offset);
@@ -82,7 +82,7 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
 
                         if (history_index + 1 == history_entries.items.len) {
                             history_entries.items[history_index] =
-                                try arena.dupe(u8, line_buffer.items);
+                                try arena.dupeZ(u8, line_buffer.items);
                         }
                         edit_stack.clearRetainingCapacity();
 
@@ -134,7 +134,7 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
                             continue;
                         }
 
-                        const edited_line = try arena.dupe(u8, line_buffer.items);
+                        const edited_line = try arena.dupeZ(u8, line_buffer.items);
                         try edit_stack.append(arena, edited_line);
 
                         _ = line_buffer.orderedRemove(col_offset);
@@ -167,7 +167,7 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
                 // then you need to include a backstop for undo's
                 const is_last_entry = history_index + 1 == history_entries.items.len;
                 if (!is_last_entry and edit_stack.items.len == 0) {
-                    const duped_finished_line = try arena.dupe(u8, line_buffer.items);
+                    const duped_finished_line = try arena.dupeZ(u8, line_buffer.items);
                     try edit_stack.append(arena, duped_finished_line);
                 }
 
@@ -181,7 +181,7 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
                 if (col_offset == 0) {
                     continue;
                 }
-                const copied_line = try arena.dupe(u8, line_buffer.items);
+                const copied_line = try arena.dupeZ(u8, line_buffer.items);
                 try edit_stack.append(arena, copied_line);
 
                 col_offset -= 1;
@@ -198,29 +198,29 @@ pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![
         }
     }
 
-    return try outlive_allocator.dupe(u8, line_buffer.items);
+    return try outlive_allocator.dupeZ(u8, line_buffer.items);
 }
 
-export fn readline(prompt: [*c]const u8) [*c]u8 {
+export fn readline(prompt: [*c]const u8) [*c]const u8 {
     const prompt_slice = std.mem.span(prompt);
     const line_slice = readline_zig(std.heap.raw_c_allocator, prompt_slice) catch return null;
     return @ptrCast(@alignCast(line_slice.ptr));
 }
 
 var is_using_history = false;
-var history_entries = std.ArrayListUnmanaged([]const u8).empty;
+var history_entries = std.ArrayListUnmanaged([:0]const u8).empty;
 
 pub fn using_history() void {
     is_using_history = true;
 }
 
-pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
-    const duped_line = try alloc.dupe(u8, line);
+pub fn add_history(alloc: std.mem.Allocator, line: [:0]const u8) !void {
+    const duped_line = try alloc.dupeZ(u8, line);
     try history_entries.append(alloc, duped_line);
 }
 
-pub fn write_history(alloc: std.mem.Allocator, filename: []const u8) !void {
-    var file = try std.fs.createFileAbsolute(filename, .{});
+pub fn write_history(alloc: std.mem.Allocator, absolute_path: [:0]const u8) !void {
+    var file = try std.fs.createFileAbsolute(absolute_path, .{});
     defer file.close();
 
     const all_entries = try std.mem.join(alloc, "\n", history_entries.items);
@@ -230,14 +230,13 @@ pub fn write_history(alloc: std.mem.Allocator, filename: []const u8) !void {
     for (history_entries.items) |entry| {
         alloc.free(entry);
     }
-    history_entries.deinit(alloc);
-    history_entries = .empty;
+    history_entries.clearAndFree(alloc);
 }
 
-pub fn read_history(alloc: std.mem.Allocator, filename: []const u8) !void {
+pub fn read_history(alloc: std.mem.Allocator, absolute_path: [:0]const u8) !void {
     is_using_history = true;
 
-    const file = try std.fs.openFileAbsolute(filename, .{});
+    const file = try std.fs.openFileAbsolute(absolute_path, .{});
     defer file.close();
 
     const data = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
@@ -245,14 +244,14 @@ pub fn read_history(alloc: std.mem.Allocator, filename: []const u8) !void {
 
     var iterator = std.mem.tokenizeScalar(u8, data, '\n');
     while (iterator.next()) |line| {
-        const duped_line = try alloc.dupe(u8, line);
+        const duped_line = try alloc.dupeZ(u8, line);
         try history_entries.append(alloc, duped_line);
     }
 }
 
 fn log(
     arena: std.mem.Allocator,
-    comptime fmt: []const u8,
+    comptime fmt: [:0]const u8,
     args: anytype,
     stdout_writer: std.fs.File.Writer,
     col: usize,
