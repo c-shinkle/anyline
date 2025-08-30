@@ -1,4 +1,4 @@
-pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]const u8 {
+pub fn readline_zig(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
@@ -199,6 +199,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]con
     }
 
     return try outlive_allocator.dupe(u8, line_buffer.items);
+}
+
+export fn readline(prompt: [*c]const u8) [*c]u8 {
+    const prompt_slice = std.mem.span(prompt);
+    const line_slice = readline_zig(std.heap.raw_c_allocator, prompt_slice) catch return null;
+    return @ptrCast(@alignCast(line_slice.ptr));
 }
 
 var is_using_history = false;

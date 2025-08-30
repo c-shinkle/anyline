@@ -11,19 +11,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    const is_x86_64_linux = target.result.cpu.arch == .x86_64 and target.result.os.tag == .linux;
     const anyline_lib = b.addLibrary(.{
         .name = "anyline",
         .root_module = anyline_mod,
-        .use_llvm = !is_x86_64_linux,
+        .linkage = .static,
     });
-
-    // const ansi_term_dep = b.dependency("ansi_term", .{
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    //
-    // anyline_lib.root_module.addImport("ansi_term", ansi_term_dep.module("ansi_term"));
     b.installArtifact(anyline_lib);
 
     const exe_mod = b.createModule(.{
@@ -36,7 +28,6 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "anyline-exe",
         .root_module = exe_mod,
-        .use_llvm = !is_x86_64_linux,
     });
 
     exe.linkLibrary(anyline_lib);

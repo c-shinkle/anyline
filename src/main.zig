@@ -10,7 +10,7 @@ pub fn main() !void {
     try anyline.read_history(outlive_allocator, filename);
 
     while (true) {
-        const line = try anyline.readline(outlive_allocator, ">> ");
+        const line = try anyline.readline_zig(outlive_allocator, ">> ");
         defer outlive_allocator.free(line);
 
         if (std.mem.eql(u8, line, ".exit")) break;
