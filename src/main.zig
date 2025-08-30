@@ -3,22 +3,22 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const outlive_allocator = gpa.allocator();
 
-    anyline.using_history();
+    anyline.zig.using_history();
 
     const filename = try findHistoryPath(outlive_allocator);
     defer outlive_allocator.free(filename);
-    try anyline.read_history(outlive_allocator, filename);
+    try anyline.zig.read_history(outlive_allocator, filename);
 
     while (true) {
-        const line = try anyline.readline_zig(outlive_allocator, ">> ");
+        const line = try anyline.zig.readline(outlive_allocator, ">> ");
         defer outlive_allocator.free(line);
 
         if (std.mem.eql(u8, line, ".exit")) break;
 
-        try anyline.add_history(outlive_allocator, line);
+        try anyline.zig.add_history(outlive_allocator, line);
     }
 
-    try anyline.write_history(outlive_allocator, filename);
+    try anyline.zig.write_history(outlive_allocator, filename);
 }
 
 fn findHistoryPath(alloc: std.mem.Allocator) ![:0]const u8 {
