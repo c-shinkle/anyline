@@ -1,5 +1,5 @@
 var is_using_history = false;
-var history_entries = std.ArrayListUnmanaged([:0]const u8).empty;
+var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 const CTRL_B = 0x02;
 const CTRL_D = 0x04;
 const CTRL_F = 0x06;
@@ -14,7 +14,7 @@ const BACK_SPACE = 0x7F;
 const esc = "\x1B";
 const csi = esc ++ "[";
 
-pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]u8 {
+pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
@@ -98,7 +98,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
 
                         if (history_index + 1 == history_entries.items.len) {
                             history_entries.items[history_index] =
-                                try arena.dupeZ(u8, line_buffer.items);
+                                try arena.dupe(u8, line_buffer.items);
                         }
                         edit_stack.clearRetainingCapacity();
 
@@ -214,12 +214,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
         }
     }
 
-    return try outlive_allocator.dupeZ(u8, line_buffer.items);
+    return try outlive_allocator.dupe(u8, line_buffer.items);
 }
 
 fn log(
     arena: std.mem.Allocator,
-    comptime fmt: [:0]const u8,
+    comptime fmt: []const u8,
     args: anytype,
     stdout_writer: std.fs.File.Writer,
     col: usize,
@@ -236,7 +236,7 @@ pub fn using_history() void {
 }
 
 pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
-    const duped_line = try alloc.dupeZ(u8, line);
+    const duped_line = try alloc.dupe(u8, line);
     try history_entries.append(alloc, duped_line);
 }
 
@@ -274,15 +274,14 @@ pub fn read_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) 
         try openDefaultHistory(alloc);
     defer file.close();
 
-    const data = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
-    // var buffer: [1024]u8 = undefined;
-    // var reader = file.readerStreaming(&buffer);
-    // const data = try reader.interface.readAlloc(alloc, 512);
+    var buffer: [1024]u8 = undefined;
+    var reader = file.readerStreaming(&buffer);
+    const data = try reader.interface.allocRemaining(alloc, .unlimited);
     defer alloc.free(data);
 
     var iterator = std.mem.tokenizeScalar(u8, data, '\n');
     while (iterator.next()) |line| {
-        const duped_line = try alloc.dupeZ(u8, line);
+        const duped_line = try alloc.dupe(u8, line);
         try history_entries.append(alloc, duped_line);
     }
 }

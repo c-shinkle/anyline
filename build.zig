@@ -4,19 +4,27 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const anyline_mod = b.createModule(.{
+    const anyline_zig_mod = b.createModule(.{
+        .root_source_file = b.path("src/readline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const anyline_c_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
 
-    const anyline_lib = b.addLibrary(.{
+    const anyline_c_lib = b.addLibrary(.{
         .name = "anyline",
-        .root_module = anyline_mod,
+        .root_module = anyline_c_mod,
         .linkage = .static,
     });
-    b.installArtifact(anyline_lib);
+    b.installArtifact(anyline_c_lib);
+
+    // exe (for testing)
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -30,8 +38,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    exe.linkLibrary(anyline_lib);
-    exe.root_module.addImport("anyline", anyline_mod);
+    exe.root_module.addImport("anyline", anyline_zig_mod);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

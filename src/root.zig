@@ -1,19 +1,22 @@
 export fn readline(prompt: [*c]const u8) [*c]u8 {
     const prompt_slice = std.mem.span(prompt);
-    const line_slice = zig.readline(std.heap.raw_c_allocator, prompt_slice) catch {
+    const line_slice = readline_lib.readline(std.heap.raw_c_allocator, prompt_slice) catch {
         return null;
     };
-    return @ptrCast(@alignCast(line_slice.ptr));
+    const line_z = std.heap.raw_c_allocator.dupeZ(u8, line_slice) catch {
+        return null;
+    };
+    return @ptrCast(@alignCast(line_z.ptr));
 }
 
 export fn add_history(line: [*c]const u8) void {
     const line_slice = if (line) |l| std.mem.span(l) else "";
-    zig.add_history(std.heap.raw_c_allocator, line_slice) catch {};
+    readline_lib.add_history(std.heap.raw_c_allocator, line_slice) catch {};
 }
 
 export fn read_history(filename: [*c]const u8) c_int {
     const maybe_absolute_path = if (filename) |f| std.mem.span(f) else null;
-    zig.read_history(std.heap.raw_c_allocator, maybe_absolute_path) catch {
+    readline_lib.read_history(std.heap.raw_c_allocator, maybe_absolute_path) catch {
         return std.c._errno().*;
     };
     return 0;
@@ -21,12 +24,16 @@ export fn read_history(filename: [*c]const u8) c_int {
 
 export fn write_history(filename: [*c]const u8) c_int {
     const maybe_absolute_path = if (filename) |f| std.mem.span(f) else null;
-    zig.write_history(std.heap.raw_c_allocator, maybe_absolute_path) catch {
+    readline_lib.write_history(std.heap.raw_c_allocator, maybe_absolute_path) catch {
         return std.c._errno().*;
     };
     return 0;
 }
 
+export fn using_history() void {
+    readline_lib.using_history();
+}
+
 const std = @import("std");
 const builtin = @import("builtin");
-pub const zig = @import("readline.zig");
+const readline_lib = @import("readline.zig");
