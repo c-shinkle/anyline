@@ -17,7 +17,7 @@ const csi = esc ++ "[";
 pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
-    var edit_stack = std.ArrayListUnmanaged([:0]const u8).empty;
+    var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
 
     var arena_allocator = std.heap.ArenaAllocator.init(outlive_allocator);
     defer arena_allocator.deinit();
@@ -70,7 +70,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
                 if (line_buffer.items.len == col_offset) {
                     continue;
                 }
-                const edited_line = try arena.dupeZ(u8, line_buffer.items);
+                const edited_line = try arena.dupe(u8, line_buffer.items);
                 try edit_stack.append(arena, edited_line);
 
                 _ = line_buffer.orderedRemove(col_offset);
@@ -150,7 +150,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
                             continue;
                         }
 
-                        const edited_line = try arena.dupeZ(u8, line_buffer.items);
+                        const edited_line = try arena.dupe(u8, line_buffer.items);
                         try edit_stack.append(arena, edited_line);
 
                         _ = line_buffer.orderedRemove(col_offset);
@@ -183,7 +183,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
                 // then you need to include a backstop for undo's
                 const is_last_entry = history_index + 1 == history_entries.items.len;
                 if (!is_last_entry and edit_stack.items.len == 0) {
-                    const duped_finished_line = try arena.dupeZ(u8, line_buffer.items);
+                    const duped_finished_line = try arena.dupe(u8, line_buffer.items);
                     try edit_stack.append(arena, duped_finished_line);
                 }
 
@@ -197,7 +197,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0
                 if (col_offset == 0) {
                     continue;
                 }
-                const copied_line = try arena.dupeZ(u8, line_buffer.items);
+                const copied_line = try arena.dupe(u8, line_buffer.items);
                 try edit_stack.append(arena, copied_line);
 
                 col_offset -= 1;
@@ -235,32 +235,49 @@ pub fn using_history() void {
     is_using_history = true;
 }
 
-pub fn add_history(alloc: std.mem.Allocator, line: [:0]const u8) !void {
+pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
     const duped_line = try alloc.dupeZ(u8, line);
     try history_entries.append(alloc, duped_line);
 }
 
-pub fn write_history(alloc: std.mem.Allocator, absolute_path: [:0]const u8) !void {
-    var file = try std.fs.createFileAbsolute(absolute_path, .{});
+pub fn write_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) !void {
+    defer {
+        for (history_entries.items) |entry| {
+            alloc.free(entry);
+        }
+        history_entries.clearAndFree(alloc);
+    }
+    const file = if (maybe_absolute_path) |absolute_path|
+        try std.fs.openFileAbsolute(absolute_path, std.fs.File.OpenFlags{ .mode = .read_write })
+    else
+        try openDefaultHistory(alloc);
     defer file.close();
 
     const all_entries = try std.mem.join(alloc, "\n", history_entries.items);
     defer alloc.free(all_entries);
-    try file.writeAll(all_entries);
 
-    for (history_entries.items) |entry| {
-        alloc.free(entry);
-    }
-    history_entries.clearAndFree(alloc);
+    var buffer: [1024]u8 = undefined;
+    var writer = file.writerStreaming(&buffer);
+    try writer.interface.writeAll(all_entries);
+    try writer.interface.flush();
 }
 
-pub fn read_history(alloc: std.mem.Allocator, absolute_path: [:0]const u8) !void {
+pub fn read_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) !void {
     is_using_history = true;
 
-    const file = try std.fs.openFileAbsolute(absolute_path, .{});
+    var file = if (maybe_absolute_path) |absolute_path|
+        try std.fs.createFileAbsolute(absolute_path, std.fs.File.CreateFlags{
+            .read = true,
+            .truncate = false,
+        })
+    else
+        try openDefaultHistory(alloc);
     defer file.close();
 
     const data = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
+    // var buffer: [1024]u8 = undefined;
+    // var reader = file.readerStreaming(&buffer);
+    // const data = try reader.interface.readAlloc(alloc, 512);
     defer alloc.free(data);
 
     var iterator = std.mem.tokenizeScalar(u8, data, '\n');
@@ -268,6 +285,23 @@ pub fn read_history(alloc: std.mem.Allocator, absolute_path: [:0]const u8) !void
         const duped_line = try alloc.dupeZ(u8, line);
         try history_entries.append(alloc, duped_line);
     }
+}
+
+fn openDefaultHistory(alloc: std.mem.Allocator) !std.fs.File {
+    const home_path = try std.process.getEnvVarOwned(alloc, switch (builtin.os.tag) {
+        .linux, .macos => "HOME",
+        .windows => "USERPROFILE",
+        else => return error.UnsupportedOS,
+    });
+    defer alloc.free(home_path);
+
+    var home_dir = try std.fs.openDirAbsolute(home_path, std.fs.Dir.OpenOptions{});
+    defer home_dir.close();
+
+    return try home_dir.createFile(".history", std.fs.File.CreateFlags{
+        .read = true,
+        .truncate = false,
+    });
 }
 
 fn setCursorColumn(writer: *std.Io.Writer, column: usize) !void {
