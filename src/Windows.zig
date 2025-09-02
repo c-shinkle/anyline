@@ -2,8 +2,8 @@ output_mode: windows_c.DWORD,
 input_mode: windows_c.DWORD,
 
 pub fn init() !WindowsState {
-    const h_out = std.io.getStdOut().handle;
-    const h_in = std.io.getStdIn().handle;
+    const h_out = std.fs.File.stdout().handle;
+    const h_in = std.fs.File.stdin().handle;
 
     var output_mode: windows_c.DWORD = 0;
     var input_mode: windows_c.DWORD = 0;
@@ -55,8 +55,8 @@ pub fn init() !WindowsState {
 }
 
 pub fn deinit(state: WindowsState) void {
-    const h_out = std.io.getStdOut().handle;
-    const h_in = std.io.getStdIn().handle;
+    const h_out = std.fs.File.stdout().handle;
+    const h_in = std.fs.File.stdin().handle;
 
     _ = windows_c.SetConsoleMode(h_out, state.output_mode);
     _ = windows_c.SetConsoleMode(h_in, state.input_mode);

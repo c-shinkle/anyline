@@ -5,3 +5,5 @@ zig-out/
 #JetBrains
 .idea/
 
+#Misc
+.demo_history
