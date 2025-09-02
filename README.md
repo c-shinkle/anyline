@@ -7,7 +7,7 @@ Anyline is a line processing library intended to be a drop-in replacement for GN
 Firstly, you need to [install Zig](https://ziglang.org/download/). 
 Then, `zig build install` will produce a static library at `zig-out/lib`.
 
-# Add as dependency
+## Add as dependency
 
 First, update your `build.zig.zon`:
 
@@ -25,4 +25,4 @@ const anyline_dep = b.dependency("anyline", .{
 your_module.addImport("anyline", anyline_dep);
 ```
 
-This will provide a editline as a static library to `your_compilation`.1
+This will provide a editline as a static library to `your_compilation`.
