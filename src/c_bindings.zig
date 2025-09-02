@@ -3,10 +3,11 @@ export fn readline(prompt: [*c]const u8) [*c]u8 {
     const line_slice = lib.readline(std.heap.raw_c_allocator, prompt_slice) catch {
         return null;
     };
-    const line_z = std.heap.raw_c_allocator.dupeZ(u8, line_slice) catch {
+    var line_slice_z = std.heap.raw_c_allocator.realloc(line_slice, line_slice.len + 1) catch {
         return null;
     };
-    return @ptrCast(@alignCast(line_z.ptr));
+    line_slice_z[line_slice_z.len - 1] = 0;
+    return @ptrCast(@alignCast(line_slice_z.ptr));
 }
 
 export fn add_history(line: [*c]const u8) void {

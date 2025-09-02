@@ -14,6 +14,8 @@ const BACK_SPACE = 0x7F;
 const esc = "\x1B";
 const csi = esc ++ "[";
 
+const new_line = if (builtin.os.tag == .windows) "\r\n" else "\n";
+
 pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
@@ -253,7 +255,7 @@ pub fn write_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8)
         try openDefaultHistory(alloc);
     defer file.close();
 
-    const all_entries = try std.mem.join(alloc, "\n", history_entries.items);
+    const all_entries = try std.mem.join(alloc, new_line, history_entries.items);
     defer alloc.free(all_entries);
 
     var buffer: [1024]u8 = undefined;
@@ -279,7 +281,7 @@ pub fn read_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) 
     const data = try reader.interface.allocRemaining(alloc, .unlimited);
     defer alloc.free(data);
 
-    var iterator = std.mem.tokenizeScalar(u8, data, '\n');
+    var iterator = std.mem.tokenizeSequence(u8, data, new_line);
     while (iterator.next()) |line| {
         const duped_line = try alloc.dupe(u8, line);
         try history_entries.append(alloc, duped_line);
@@ -317,5 +319,3 @@ const control_code = std.ascii.control_code;
 
 const Linux = @import("Linux.zig");
 const Windows = @import("Windows.zig");
-
-const windows_c = @cImport(@cInclude("windows.h"));
