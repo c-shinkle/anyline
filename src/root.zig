@@ -30,13 +30,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 
     var history_index: usize = history_entries.items.len - 1;
 
     const old = switch (builtin.os.tag) {
-        .linux, .macos => try Linux.init(),
+        .linux => try Linux.init(),
+        .macos => try MacOs.init(),
         .windows => try Windows.init(),
         else => return error.UnsupportedOS,
     };
     defer switch (builtin.os.tag) {
-        .linux, .macos => old.deinit(),
-        .windows => old.deinit(),
+        .linux, .macos, .windows => old.deinit(),
         else => unreachable,
     };
 
@@ -318,4 +318,5 @@ const builtin = @import("builtin");
 const control_code = std.ascii.control_code;
 
 const Linux = @import("Linux.zig");
+const MacOs = @import("MacOS.zig");
 const Windows = @import("Windows.zig");
