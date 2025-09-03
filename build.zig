@@ -25,6 +25,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(anyline_c_lib);
 
+    const header_install_step = b.addInstallFile(b.path("include/anyline.h"), "include/anyline.h");
+    b.getInstallStep().dependOn(&header_install_step.step);
+
     // exe (for testing)
 
     const exe_mod = b.createModule(.{
