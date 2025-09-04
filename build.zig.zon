@@ -1,14 +1,8 @@
 .{
     .name = .anyline,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x86c11f51efdccf3c,
     .minimum_zig_version = "0.15.1",
-    // .dependencies = .{
-    //     .ansi_term = .{
-    //         .url = "https://github.com/ziglibs/ansi_term/archive/refs/tags/v0.1.0.tar.gz",
-    //         .hash = "ansi_term-0.1.0-_baAy9djAABNQdiVAt7Iwk4wlBh2kL-UAxEDd3wDs-09",
-    //     },
-    // },
     .paths = .{
         "build.zig",
         "build.zig.zon",
