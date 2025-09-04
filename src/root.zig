@@ -40,14 +40,11 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 
         else => unreachable,
     };
 
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
     var stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
     var stdin = std.fs.File.stdin();
-
-    var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
-    var stderr = &stderr_writer.interface;
 
     // Windows needs the following two lines to prevent garbage writes to the terminal
     try setCursorColumn(stdout, 0);
@@ -161,7 +158,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 
                         try setCursorColumn(stdout, prompt.len + col_offset);
                     },
                     else => {
-                        try stderr.print("Unhandled control byte: {d}\n", .{third_byte});
+                        try log(
+                            arena,
+                            "Unhandled control byte: {d}",
+                            .{third_byte},
+                            stdout,
+                            prompt.len + col_offset,
+                        );
                     },
                 }
             },
@@ -210,9 +213,13 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 
                 try stdout.writeByte(' ');
                 try setCursorColumn(stdout, prompt.len + col_offset);
             },
-            else => |unknown_byte| try stderr.print("Unhandled character: {d}\n", .{
-                unknown_byte,
-            }),
+            else => |unknown_byte| try log(
+                arena,
+                "Unhandled character: {d}",
+                .{unknown_byte},
+                stdout,
+                prompt.len + col_offset,
+            ),
         }
     }
 
@@ -223,14 +230,17 @@ fn log(
     arena: std.mem.Allocator,
     comptime fmt: []const u8,
     args: anytype,
-    stdout_writer: std.fs.File.Writer,
+    writer: *std.Io.Writer,
     col: usize,
 ) !void {
+    if (!(builtin.mode == .Debug)) return;
+
     const max_rows = 100;
     const msg = try std.fmt.allocPrint(arena, fmt, args);
-    try setCursorColumn(stdout_writer, max_rows - msg.len);
-    try stdout_writer.writeAll(msg);
-    try setCursorColumn(stdout_writer, col);
+
+    try setCursorColumn(writer, max_rows - msg.len);
+    try writer.writeAll(msg);
+    try setCursorColumn(writer, col);
 }
 
 pub fn using_history() void {
