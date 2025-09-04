@@ -30,8 +30,8 @@ your_module.addImport("anyline", anyline_dep);
 
 ## Supported platforms
 
-| Operating System | Architecture | Terminal Emulator  | Shell        |
-| ---------------- | ------------ | -------------------| ------------ |
-| Windows 11       | x86_64       | Microsoft Terminal | PowerShell 7 |
-| Linux            | x86_64       | Ghostty, GNOME     | Fish, Bash   |
-| MacOS            | aarch64      | Ghostty            | Fish         |
+| Operating System | Architecture | Terminal Emulator               | Shell        |
+| ---------------- | ------------ | ------------------------------- | ------------ |
+| Windows 11       | x86_64       | Microsoft Terminal              | PowerShell 7 |
+| Linux            | x86_64       | Ghostty, GNOME                  | Fish, Bash   |
+| MacOS            | aarch64      | Ghostty, iTerm2, MacOS Terminal | Fish, Zsh    |
