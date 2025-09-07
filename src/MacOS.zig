@@ -1,6 +1,8 @@
 old_termios: termios.termios,
 
-pub fn init() !MacOS {
+pub const Error = error{TerminosFailure} || std.Io.Writer.Error;
+
+pub fn init() Error!MacOS {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writerStreaming(&stderr_buffer);
     const stdin_handle = std.fs.File.stdin().handle;

@@ -1,6 +1,8 @@
 old: termios.termios,
 
-pub fn init() !Linux {
+pub const Error = error{TerminosFailure} || std.Io.Writer.Error;
+
+pub fn init() Error!Linux {
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;

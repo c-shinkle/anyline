@@ -1,7 +1,9 @@
 output_mode: windows_c.DWORD,
 input_mode: windows_c.DWORD,
 
-pub fn init() !WindowsState {
+pub const Error = error{ InvalidHandle, SetConsoleModeFailure } || std.Io.Writer.Error;
+
+pub fn init() Error!WindowsState {
     const h_out = std.fs.File.stdout().handle;
     const h_in = std.fs.File.stdin().handle;
 

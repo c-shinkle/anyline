@@ -16,7 +16,29 @@ const csi = esc ++ "[";
 
 const new_line = if (builtin.os.tag == .windows) "\r\n" else "\n";
 
-pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
+pub const ReadlineError =
+    std.mem.Allocator.Error ||
+    std.fs.File.ReadError ||
+    std.fs.File.WriteError ||
+    switch (builtin.os.tag) {
+        .linux => Linux.Error,
+        .macos => MacOs.Error,
+        .windows => Windows.Error,
+        else => @compileError(std.fmt.comptimePrint("{s} is not a supported OS!", .{
+            name: for (@typeInfo(std.Target.Os.Tag).@"enum".fields) |field| {
+                if (@intFromEnum(builtin.os.tag) == field.value) break :name field.name;
+            },
+        })),
+    };
+
+pub const AddHistoryError = std.mem.Allocator.Error;
+
+pub const WriteHistoryError =
+    std.process.GetEnvVarOwnedError ||
+    std.fs.File.OpenError ||
+    std.Io.Writer.Error;
+
+pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ReadlineError![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
@@ -33,7 +55,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) ![]u8 
         .linux => try Linux.init(),
         .macos => try MacOs.init(),
         .windows => try Windows.init(),
-        else => return error.UnsupportedOS,
+        else => unreachable,
     };
     defer switch (builtin.os.tag) {
         .linux, .macos, .windows => old.deinit(),
@@ -247,12 +269,12 @@ pub fn using_history() void {
     is_using_history = true;
 }
 
-pub fn add_history(alloc: std.mem.Allocator, line: []const u8) !void {
+pub fn add_history(alloc: std.mem.Allocator, line: []const u8) AddHistoryError!void {
     const duped_line = try alloc.dupe(u8, line);
     try history_entries.append(alloc, duped_line);
 }
 
-pub fn write_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) !void {
+pub fn write_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8) WriteHistoryError!void {
     defer {
         for (history_entries.items) |entry| {
             alloc.free(entry);
@@ -302,7 +324,7 @@ fn openDefaultHistory(alloc: std.mem.Allocator) !std.fs.File {
     const home_path = try std.process.getEnvVarOwned(alloc, switch (builtin.os.tag) {
         .linux, .macos => "HOME",
         .windows => "USERPROFILE",
-        else => return error.UnsupportedOS,
+        else => unreachable,
     });
     defer alloc.free(home_path);
 
