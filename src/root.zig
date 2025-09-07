@@ -19,6 +19,8 @@ const new_line = if (builtin.os.tag == .windows) "\r\n" else "\n";
 pub const ReadlineError =
     std.mem.Allocator.Error ||
     std.fs.File.ReadError ||
+    std.Io.Reader.Error ||
+    std.Io.Reader.DelimiterError ||
     std.fs.File.WriteError ||
     switch (builtin.os.tag) {
         .linux => Linux.Error,
@@ -114,7 +116,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                 std.debug.assert('[' == stdin_buffer[1]);
                 if (bytes_read > 4) {
                     const fmt = "Kitty protocol not supported: {s}";
-                    try log(arena, fmt, .{stdin_buffer[2..8]}, stdout, prompt.len + col_offset);
+                    try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
                     continue;
                 }
 
@@ -189,7 +191,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                     },
                     else => {
                         const fmt = "Unhandled control byte: {d}";
-                        try log(arena, fmt, .{third_byte}, stdout, prompt.len + col_offset);
+                        try log(arena, fmt, .{third_byte}, prompt.len + col_offset);
                     },
                 }
             },
@@ -240,7 +242,7 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
-                try log(arena, fmt, .{unknown_byte}, stdout, prompt.len + col_offset);
+                try log(arena, fmt, .{unknown_byte}, prompt.len + col_offset);
             },
         }
     }
@@ -248,21 +250,33 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
     return try outlive_allocator.dupe(u8, line_buffer.items);
 }
 
-fn log(
-    arena: std.mem.Allocator,
-    comptime fmt: []const u8,
-    args: anytype,
-    writer: *std.Io.Writer,
-    col: usize,
-) !void {
+fn log(arena: std.mem.Allocator, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
     if (!(builtin.mode == .Debug)) return;
 
-    const max_rows = 100;
-    const msg = try std.fmt.allocPrint(arena, fmt, args);
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
+    var stdout = &stdout_writer.interface;
 
-    try setCursorColumn(writer, max_rows - msg.len);
-    try writer.writeAll(msg);
-    try setCursorColumn(writer, col);
+    const max_col = max_col: {
+        try setCursorColumn(stdout, 999);
+        try queryCursorPosition(stdout);
+        try stdout.flush();
+
+        var buffer: [32]u8 = undefined;
+        var reader = std.fs.File.stdin().readerStreaming(&buffer);
+        const input = try reader.interface.takeDelimiterExclusive('R');
+
+        std.debug.assert(input[0] == std.ascii.control_code.esc);
+        std.debug.assert(input[1] == '[');
+
+        const semicolon_index = std.mem.indexOf(u8, input, ";").?;
+        const position_slice = input[semicolon_index + 1 ..];
+        break :max_col std.fmt.parseUnsigned(usize, position_slice, 10) catch unreachable;
+    };
+
+    const msg = try std.fmt.allocPrint(arena, fmt, args);
+    try setCursorColumn(stdout, max_col - msg.len);
+    try stdout.writeAll(msg);
+    try setCursorColumn(stdout, prev_col);
 }
 
 pub fn using_history() void {
@@ -282,7 +296,7 @@ pub fn write_history(alloc: std.mem.Allocator, maybe_absolute_path: ?[]const u8)
         history_entries.clearAndFree(alloc);
     }
     const file = if (maybe_absolute_path) |absolute_path|
-        try std.fs.openFileAbsolute(absolute_path, std.fs.File.OpenFlags{ .mode = .read_write })
+        try std.fs.openFileAbsolute(absolute_path, std.fs.File.OpenFlags{ .mode = .write_only })
     else
         try openDefaultHistory(alloc);
     defer file.close();
@@ -343,6 +357,10 @@ fn setCursorColumn(writer: *std.Io.Writer, column: usize) !void {
 
 fn clearFromCursorToLineEnd(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "K");
+}
+
+fn queryCursorPosition(writer: *std.Io.Writer) !void {
+    try writer.writeAll(csi ++ "6n");
 }
 
 const std = @import("std");
