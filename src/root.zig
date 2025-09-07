@@ -75,8 +75,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
     try stdout.flush();
 
     while (true) : (try stdout.flush()) {
-        var stdin_buffer: [4]u8 = undefined;
-        std.debug.assert(try stdin.read(&stdin_buffer) > 0);
+        var stdin_buffer: [8]u8 = undefined;
+        const bytes_read = try stdin.read(&stdin_buffer);
+        std.debug.assert(bytes_read > 0);
+
         const first_byte = stdin_buffer[0];
         switch (first_byte) {
             CTRL_B => {
@@ -110,6 +112,12 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
             },
             std.ascii.control_code.esc => {
                 std.debug.assert('[' == stdin_buffer[1]);
+                if (bytes_read > 4) {
+                    const fmt = "Kitty protocol not supported: {s}";
+                    try log(arena, fmt, .{stdin_buffer[2..8]}, stdout, prompt.len + col_offset);
+                    continue;
+                }
+
                 const third_byte = stdin_buffer[2];
                 switch (third_byte) {
                     UP_ARROW => {
@@ -180,13 +188,8 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                         try setCursorColumn(stdout, prompt.len + col_offset);
                     },
                     else => {
-                        try log(
-                            arena,
-                            "Unhandled control byte: {d}",
-                            .{third_byte},
-                            stdout,
-                            prompt.len + col_offset,
-                        );
+                        const fmt = "Unhandled control byte: {d}";
+                        try log(arena, fmt, .{third_byte}, stdout, prompt.len + col_offset);
                     },
                 }
             },
@@ -235,13 +238,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                 try stdout.writeByte(' ');
                 try setCursorColumn(stdout, prompt.len + col_offset);
             },
-            else => |unknown_byte| try log(
-                arena,
-                "Unhandled character: {d}",
-                .{unknown_byte},
-                stdout,
-                prompt.len + col_offset,
-            ),
+            else => |unknown_byte| {
+                const fmt = "Unhandled character: {d}";
+                try log(arena, fmt, .{unknown_byte}, stdout, prompt.len + col_offset);
+            },
         }
     }
 
@@ -341,7 +341,7 @@ fn setCursorColumn(writer: *std.Io.Writer, column: usize) !void {
     try writer.print(csi ++ "{}G", .{column + 1});
 }
 
-pub fn clearFromCursorToLineEnd(writer: *std.Io.Writer) !void {
+fn clearFromCursorToLineEnd(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "K");
 }
 
