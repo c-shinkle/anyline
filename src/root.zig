@@ -1,7 +1,9 @@
 var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
+const CTRL_A = 0x01;
 const CTRL_B = 0x02;
 const CTRL_D = 0x04;
+const CTRL_E = 0x05;
 const CTRL_F = 0x06;
 const UP_ARROW = 'A';
 const DOWN_ARROW = 'B';
@@ -83,6 +85,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
 
         const first_byte = stdin_buffer[0];
         switch (first_byte) {
+            CTRL_A => {
+                col_offset = 0;
+                try setCursorColumn(stdout, prompt.len + col_offset);
+            },
             CTRL_B => {
                 col_offset -|= 1;
                 try setCursorColumn(stdout, prompt.len + col_offset);
@@ -104,6 +110,10 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                 try stdout.writeByte(' ');
                 try setCursorColumn(stdout, prompt.len + col_offset);
             },
+            CTRL_E => {
+                col_offset = line_buffer.items.len;
+                try setCursorColumn(stdout, prompt.len + col_offset);
+            },
             CTRL_F => {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
                 try setCursorColumn(stdout, prompt.len + col_offset);
@@ -113,86 +123,113 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                 break;
             },
             std.ascii.control_code.esc => {
-                std.debug.assert('[' == stdin_buffer[1]);
+                if (bytes_read == 1) continue;
                 if (bytes_read > 4) {
                     const fmt = "Kitty protocol not supported: {s}";
                     try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
                     continue;
                 }
 
-                const third_byte = stdin_buffer[2];
-                switch (third_byte) {
-                    UP_ARROW => {
-                        if (!is_using_history or history_index == 0) {
-                            continue;
-                        }
+                const second_byte = stdin_buffer[1];
+                if ('[' == second_byte) {
+                    const third_byte = stdin_buffer[2];
+                    switch (third_byte) {
+                        UP_ARROW => {
+                            if (!is_using_history or history_index == 0) {
+                                continue;
+                            }
 
-                        if (history_index + 1 == history_entries.items.len) {
-                            history_entries.items[history_index] =
-                                try arena.dupe(u8, line_buffer.items);
-                        }
-                        edit_stack.clearRetainingCapacity();
+                            if (history_index + 1 == history_entries.items.len) {
+                                history_entries.items[history_index] =
+                                    try arena.dupe(u8, line_buffer.items);
+                            }
+                            edit_stack.clearRetainingCapacity();
 
-                        history_index -= 1;
+                            history_index -= 1;
 
-                        line_buffer.clearRetainingCapacity();
-                        try line_buffer.appendSlice(
-                            arena,
-                            history_entries.items[history_index],
-                        );
+                            line_buffer.clearRetainingCapacity();
+                            try line_buffer.appendSlice(
+                                arena,
+                                history_entries.items[history_index],
+                            );
 
-                        try setCursorColumn(stdout, prompt.len);
-                        try clearFromCursorToLineEnd(stdout);
-                        try stdout.writeAll(line_buffer.items);
-                        col_offset = line_buffer.items.len;
-                    },
-                    DOWN_ARROW => {
-                        const is_last_entry = history_index + 1 == history_entries.items.len;
-                        if (!is_using_history or is_last_entry) {
-                            continue;
-                        }
+                            try setCursorColumn(stdout, prompt.len);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items);
+                            col_offset = line_buffer.items.len;
+                        },
+                        DOWN_ARROW => {
+                            const is_last_entry = history_index + 1 == history_entries.items.len;
+                            if (!is_using_history or is_last_entry) {
+                                continue;
+                            }
 
-                        edit_stack.clearRetainingCapacity();
-                        history_index += 1;
+                            edit_stack.clearRetainingCapacity();
+                            history_index += 1;
 
-                        line_buffer.clearRetainingCapacity();
-                        try line_buffer.appendSlice(
-                            arena,
-                            history_entries.items[history_index],
-                        );
+                            line_buffer.clearRetainingCapacity();
+                            try line_buffer.appendSlice(
+                                arena,
+                                history_entries.items[history_index],
+                            );
 
-                        try setCursorColumn(stdout, prompt.len);
-                        try clearFromCursorToLineEnd(stdout);
-                        try stdout.writeAll(line_buffer.items);
-                        col_offset = line_buffer.items.len;
-                    },
-                    RIGHT_ARROW => {
-                        col_offset = @min(col_offset + 1, line_buffer.items.len);
-                        try setCursorColumn(stdout, prompt.len + col_offset);
-                    },
-                    LEFT_ARROW => {
-                        col_offset -|= 1;
-                        try setCursorColumn(stdout, prompt.len + col_offset);
-                    },
-                    DEL => {
-                        std.debug.assert('~' == stdin_buffer[3]);
+                            try setCursorColumn(stdout, prompt.len);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items);
+                            col_offset = line_buffer.items.len;
+                        },
+                        RIGHT_ARROW => {
+                            col_offset = @min(col_offset + 1, line_buffer.items.len);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                        },
+                        LEFT_ARROW => {
+                            col_offset -|= 1;
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                        },
+                        DEL => {
+                            std.debug.assert('~' == stdin_buffer[3]);
 
-                        if (line_buffer.items.len == col_offset) {
-                            continue;
-                        }
+                            if (line_buffer.items.len == col_offset) {
+                                continue;
+                            }
 
-                        const edited_line = try arena.dupe(u8, line_buffer.items);
-                        try edit_stack.append(arena, edited_line);
+                            const edited_line = try arena.dupe(u8, line_buffer.items);
+                            try edit_stack.append(arena, edited_line);
 
-                        _ = line_buffer.orderedRemove(col_offset);
-                        try clearFromCursorToLineEnd(stdout);
-                        try stdout.writeAll(line_buffer.items[col_offset..]);
-                        try setCursorColumn(stdout, prompt.len + col_offset);
-                    },
-                    else => {
-                        const fmt = "Unhandled control byte: {d}";
-                        try log(arena, fmt, .{third_byte}, prompt.len + col_offset);
-                    },
+                            _ = line_buffer.orderedRemove(col_offset);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                        },
+                        else => {
+                            const fmt = "Unhandled control byte: {d}";
+                            try log(arena, fmt, .{third_byte}, prompt.len + col_offset);
+                        },
+                    }
+                } else {
+                    switch (second_byte) {
+                        'f' => {
+                            var index = col_offset;
+                            const was_prev_char_alphanumeric = std.ascii.isAlphanumeric(line_buffer.items[index]);
+
+                            while (index < line_buffer.items.len) {
+                                index += 1;
+                                if (index == line_buffer.items.len) break;
+
+                                if (was_prev_char_alphanumeric and !std.ascii.isAlphanumeric(line_buffer.items[index])) {
+                                    break;
+                                } else if (!was_prev_char_alphanumeric and std.ascii.isAlphanumeric(line_buffer.items[index])) {
+                                    break;
+                                }
+                            }
+                            col_offset = index;
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                        },
+                        else => {
+                            const fmt = "Unhandled meta byte: {d}";
+                            try log(arena, fmt, .{second_byte}, prompt.len + col_offset);
+                        },
+                    }
                 }
             },
             UNDERSCORE => {
