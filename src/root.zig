@@ -225,6 +225,24 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                             col_offset = i;
                             try setCursorColumn(stdout, prompt.len + col_offset);
                         },
+                        'b' => {
+                            if (col_offset == 0) continue;
+
+                            var i = @min(col_offset, line_buffer.items.len - 1);
+                            const isAN = std.ascii.isAlphabetic;
+                            const was_prev_char_an = isAN(line_buffer.items[i]);
+
+                            i -= 1;
+                            while (i > 0) : (i -= 1) {
+                                if (was_prev_char_an and !isAN(line_buffer.items[i])) {
+                                    break;
+                                } else if (!was_prev_char_an and isAN(line_buffer.items[i])) {
+                                    break;
+                                }
+                            }
+                            col_offset = i;
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                        },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
                             try log(arena, fmt, .{second_byte}, prompt.len + col_offset);
