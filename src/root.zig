@@ -209,20 +209,20 @@ pub fn readline(outlive_allocator: std.mem.Allocator, prompt: []const u8) Readli
                 } else {
                     switch (second_byte) {
                         'f' => {
-                            var index = col_offset;
-                            const was_prev_char_alphanumeric = std.ascii.isAlphanumeric(line_buffer.items[index]);
+                            if (col_offset == line_buffer.items.len) continue;
 
-                            while (index < line_buffer.items.len) {
-                                index += 1;
-                                if (index == line_buffer.items.len) break;
+                            const isAN = std.ascii.isAlphabetic;
+                            const was_prev_char_an = isAN(line_buffer.items[col_offset]);
 
-                                if (was_prev_char_alphanumeric and !std.ascii.isAlphanumeric(line_buffer.items[index])) {
+                            var i = col_offset + 1;
+                            while (i < line_buffer.items.len) : (i += 1) {
+                                if (was_prev_char_an and !isAN(line_buffer.items[i])) {
                                     break;
-                                } else if (!was_prev_char_alphanumeric and std.ascii.isAlphanumeric(line_buffer.items[index])) {
+                                } else if (!was_prev_char_an and isAN(line_buffer.items[i])) {
                                     break;
                                 }
                             }
-                            col_offset = index;
+                            col_offset = i;
                             try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         else => {
@@ -301,9 +301,6 @@ fn log(arena: std.mem.Allocator, comptime fmt: []const u8, args: anytype, prev_c
         var buffer: [32]u8 = undefined;
         var reader = std.fs.File.stdin().readerStreaming(&buffer);
         const input = try reader.interface.takeDelimiterExclusive('R');
-
-        std.debug.assert(input[0] == std.ascii.control_code.esc);
-        std.debug.assert(input[1] == '[');
 
         const semicolon_index = std.mem.indexOf(u8, input, ";").?;
         const position_slice = input[semicolon_index + 1 ..];
