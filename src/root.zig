@@ -213,10 +213,11 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
                             const was_an = isAN(line_buffer.items[col_offset]);
 
                             var i = col_offset + 1;
-                            while (i < line_buffer.items.len) : (i += 1) {
-                                const not_an_streak = !was_an or !isAN(line_buffer.items[i]);
-                                const not_non_an_streak = was_an or isAN(line_buffer.items[i]);
-                                if (not_an_streak and not_non_an_streak) break;
+                            const len = line_buffer.items.len;
+                            if (was_an) {
+                                while (i < len and isAN(line_buffer.items[i])) i += 1;
+                            } else {
+                                while (i < len and !isAN(line_buffer.items[i])) i += 1;
                             }
                             col_offset = i;
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
@@ -229,10 +230,10 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
                             const was_an = isAN(line_buffer.items[i]);
 
                             i -= 1;
-                            while (i > 0) : (i -= 1) {
-                                const not_an_streak = !was_an or !isAN(line_buffer.items[i]);
-                                const not_non_an_streak = was_an or isAN(line_buffer.items[i]);
-                                if (not_an_streak and not_non_an_streak) break;
+                            if (was_an) {
+                                while (i > 0 and isAN(line_buffer.items[i])) i -= 1;
+                            } else {
+                                while (i > 0 and !isAN(line_buffer.items[i])) i -= 1;
                             }
                             col_offset = i;
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
