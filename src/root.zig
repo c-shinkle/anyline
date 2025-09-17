@@ -5,6 +5,7 @@ const CTRL_B = 0x02;
 const CTRL_D = 0x04;
 const CTRL_E = 0x05;
 const CTRL_F = 0x06;
+const CTRL_L = 0x0c;
 const UP_ARROW = 'A';
 const DOWN_ARROW = 'B';
 const RIGHT_ARROW = 'C';
@@ -114,6 +115,15 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
             },
             CTRL_F => {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
+                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+            },
+            CTRL_L => {
+                try clearEntireScreen(&stdout_writer.interface);
+                try setCursor(&stdout_writer.interface, 0, 0);
+
+                try stdout_writer.interface.writeAll(prompt);
+                try stdout_writer.interface.writeAll(line_buffer.items);
+
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
             std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
@@ -401,8 +411,16 @@ fn setCursorColumn(writer: *std.Io.Writer, column: usize) !void {
     try writer.print(csi ++ "{}G", .{column + 1});
 }
 
+fn setCursor(writer: *std.Io.Writer, x: usize, y: usize) !void {
+    try writer.print(csi ++ "{};{}H", .{ y + 1, x + 1 });
+}
+
 fn clearFromCursorToLineEnd(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "K");
+}
+
+fn clearEntireScreen(writer: *std.Io.Writer) !void {
+    try writer.writeAll(csi ++ "2J");
 }
 
 fn queryCursorPosition(writer: *std.Io.Writer) !void {
