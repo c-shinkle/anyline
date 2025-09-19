@@ -2,6 +2,7 @@ var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 const CTRL_A = 0x01;
 const CTRL_B = 0x02;
+const CTRL_C = 0x03;
 const CTRL_D = 0x04;
 const CTRL_E = 0x05;
 const CTRL_F = 0x06;
@@ -91,6 +92,10 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
             CTRL_B => {
                 col_offset -|= 1;
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+            },
+            CTRL_C => {
+                std.debug.assert(builtin.os.tag == .windows);
+                std.process.exit(0);
             },
             CTRL_D => {
                 if (line_buffer.items.len == 0) {
