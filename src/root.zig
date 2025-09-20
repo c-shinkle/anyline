@@ -44,16 +44,16 @@ pub const WriteHistoryError =
     std.fs.File.OpenError ||
     std.Io.Writer.Error;
 
-pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
+pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
 
-    var arena_allocator = std.heap.ArenaAllocator.init(outlive_allocator);
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
 
-    try history_entries.append(outlive_allocator, undefined);
+    try history_entries.append(allocator, undefined);
     defer _ = history_entries.pop();
     var history_index: usize = history_entries.items.len - 1;
 
@@ -68,7 +68,8 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
         else => unreachable,
     };
 
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
 
     var stdin_file = std.fs.File.stdin();
 
@@ -139,7 +140,7 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
                 if (bytes_read == 1) continue;
                 if (bytes_read > 4) {
                     const fmt = "Kitty protocol not supported: {s}";
-                    try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
+                    try log(allocator, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
                     continue;
                 }
 
@@ -216,7 +217,7 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
                         },
                         else => {
                             const fmt = "Unhandled control byte: {d}";
-                            try log(arena, fmt, .{third_byte}, prompt.len + col_offset);
+                            try log(allocator, fmt, .{third_byte}, prompt.len + col_offset);
                         },
                     }
                 } else {
@@ -255,7 +256,7 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
                         },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
-                            try log(arena, fmt, .{second_byte}, prompt.len + col_offset);
+                            try log(allocator, fmt, .{second_byte}, prompt.len + col_offset);
                         },
                     }
                 }
@@ -307,15 +308,15 @@ pub fn readline(outlive_allocator: Allocator, prompt: []const u8) ReadlineError!
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
-                try log(arena, fmt, .{unknown_byte}, prompt.len + col_offset);
+                try log(allocator, fmt, .{unknown_byte}, prompt.len + col_offset);
             },
         }
     }
 
-    return try outlive_allocator.dupe(u8, line_buffer.items);
+    return try allocator.dupe(u8, line_buffer.items);
 }
 
-fn log(arena: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
+fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
     if (!(builtin.mode == .Debug)) return;
 
     var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
@@ -334,7 +335,8 @@ fn log(arena: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usiz
         break :max_col std.fmt.parseUnsigned(usize, position_slice, 10) catch unreachable;
     };
 
-    const msg = try std.fmt.allocPrint(arena, fmt, args);
+    const msg = try std.fmt.allocPrint(alloc, fmt, args);
+    defer alloc.free(msg);
     try setCursorColumn(&stdout_writer.interface, max_col - msg.len);
     try stdout_writer.interface.writeAll(msg);
     try setCursorColumn(&stdout_writer.interface, prev_col);
