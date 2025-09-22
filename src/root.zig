@@ -70,7 +70,8 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
         else => unreachable,
     };
 
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
 
     var stdin_file = std.fs.File.stdin();
 
@@ -135,6 +136,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
             },
             std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
                 try stdout_writer.interface.writeByte('\n');
+                try stdout_writer.interface.flush();
                 break;
             },
             std.ascii.control_code.esc => {
