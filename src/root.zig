@@ -30,6 +30,7 @@ pub const ReadlineError =
         .linux => Linux.Error,
         .macos => MacOs.Error,
         .windows => Windows.Error,
+        .freebsd => FreeBSD.Error,
         else => @compileError(std.fmt.comptimePrint("{s} is not a supported OS!", .{
             name: for (@typeInfo(std.Target.Os.Tag).@"enum".fields) |field| {
                 if (@intFromEnum(builtin.os.tag) == field.value) break :name field.name;
@@ -61,15 +62,15 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
         .linux => try Linux.init(),
         .macos => try MacOs.init(),
         .windows => try Windows.init(),
+        .freebsd => try FreeBSD.init(),
         else => unreachable,
     };
     defer switch (builtin.os.tag) {
-        .linux, .macos, .windows => old.deinit(),
+        .linux, .macos, .windows, .freebsd => old.deinit(),
         else => unreachable,
     };
 
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 
     var stdin_file = std.fs.File.stdin();
 
@@ -399,7 +400,7 @@ pub fn read_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) !void {
 
 fn openDefaultHistory(alloc: Allocator) !std.fs.File {
     const home_path = try std.process.getEnvVarOwned(alloc, switch (builtin.os.tag) {
-        .linux, .macos => "HOME",
+        .linux, .macos, .freebsd => "HOME",
         .windows => "USERPROFILE",
         else => unreachable,
     });
@@ -434,6 +435,8 @@ fn queryCursorPosition(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "6n");
 }
 
+// try log(allocator, "stdin: {d:0>3}, {d}, {d}, {d}, {d}, {d}, {d}, {d}", .{ stdin_buffer[0], stdin_buffer[1], stdin_buffer[2], stdin_buffer[3], stdin_buffer[4], stdin_buffer[5], stdin_buffer[6], stdin_buffer[7] }, prompt.len + col_offset);
+
 const std = @import("std");
 const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
@@ -443,3 +446,4 @@ const builtin = @import("builtin");
 const Linux = @import("Linux.zig");
 const MacOs = @import("MacOS.zig");
 const Windows = @import("Windows.zig");
+const FreeBSD = @import("FreeBSD.zig");
