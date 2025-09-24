@@ -6,6 +6,7 @@ const CTRL_C = 0x03;
 const CTRL_D = 0x04;
 const CTRL_E = 0x05;
 const CTRL_F = 0x06;
+const CTRL_K = 0x0b;
 const CTRL_L = 0x0c;
 const UP_ARROW = 'A';
 const DOWN_ARROW = 'B';
@@ -49,6 +50,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
+    var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
 
     var arena_allocator = std.heap.ArenaAllocator.init(allocator);
     defer arena_allocator.deinit();
@@ -125,6 +127,14 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
+            CTRL_K => {
+                const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..]);
+                try copy_stack.append(allocator, duped_buffer);
+
+                line_buffer.shrinkRetainingCapacity(col_offset);
+
+                try clearFromCursorToLineEnd(&stdout_writer.interface);
+            },
             CTRL_L => {
                 try clearEntireScreen(&stdout_writer.interface);
                 try setCursor(&stdout_writer.interface, 0, 0);
@@ -141,9 +151,18 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
             },
             std.ascii.control_code.esc => {
                 if (bytes_read == 1) continue;
-                if (bytes_read > 4) {
-                    const fmt = "Kitty protocol not supported: {s}";
-                    try log(allocator, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
+
+                if (bytes_read > 3) {
+                    try handle_kitty_protocol(
+                        arena,
+                        &stdout_writer.interface,
+                        bytes_read,
+                        stdin_buffer,
+                        &col_offset,
+                        &line_buffer,
+                        &copy_stack,
+                        prompt,
+                    );
                     continue;
                 }
 
@@ -259,6 +278,38 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
                         },
+                        'd' => {
+                            var word_offset = col_offset;
+                            const len = line_buffer.items.len;
+                            if (col_offset == len) continue;
+
+                            const isAN = std.ascii.isAlphanumeric;
+                            if (!isAN(line_buffer.items[word_offset])) {
+                                while (word_offset < len and !isAN(line_buffer.items[word_offset])) {
+                                    word_offset += 1;
+                                }
+                            }
+                            while (word_offset < len and isAN(line_buffer.items[word_offset])) {
+                                word_offset += 1;
+                            }
+
+                            const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..word_offset]);
+                            try copy_stack.append(arena, duped_buffer);
+
+                            try line_buffer.replaceRange(
+                                arena,
+                                col_offset,
+                                line_buffer.items.len - word_offset,
+                                line_buffer.items[word_offset..],
+                            );
+
+                            const new_len = line_buffer.items.len - (word_offset - col_offset);
+                            line_buffer.shrinkRetainingCapacity(new_len);
+
+                            try clearFromCursorToLineEnd(&stdout_writer.interface);
+                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                        },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
                             try log(allocator, fmt, .{second_byte}, prompt.len + col_offset);
@@ -346,6 +397,61 @@ fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usiz
     try stdout_writer.interface.writeAll(msg);
     try setCursorColumn(&stdout_writer.interface, prev_col);
 }
+
+fn handle_kitty_protocol(
+    arena: std.mem.Allocator,
+    stdout: *std.Io.Writer,
+    bytes_read: usize,
+    stdin_buffer: [8]u8,
+    col_offset: *usize,
+    line_buffer: *std.ArrayListUnmanaged(u8),
+    copy_stack: *std.ArrayListUnmanaged([]const u8),
+    prompt: []const u8,
+) !void {
+    if (bytes_read >= 6 and
+        stdin_buffer[2] == '3' and
+        stdin_buffer[3] == ';' and
+        stdin_buffer[4] == '3' and
+        stdin_buffer[5] == '~')
+    {
+        const prev_col_offset = @min(col_offset.* + 1, line_buffer.items.len);
+        if (prev_col_offset == 0) return;
+        std.debug.assert(line_buffer.items.len > 0);
+        var next_col_offset = prev_col_offset;
+
+        const isAN = std.ascii.isAlphabetic;
+        if (!isAN(line_buffer.items[next_col_offset - 1])) {
+            while (next_col_offset > 0 and !isAN(line_buffer.items[next_col_offset - 1])) next_col_offset -= 1;
+        }
+        while (next_col_offset > 0 and isAN(line_buffer.items[next_col_offset - 1])) {
+            next_col_offset -= 1;
+        }
+
+        const duped_buffer = try arena.dupe(u8, line_buffer.items[next_col_offset..prev_col_offset]);
+        try copy_stack.append(arena, duped_buffer);
+
+        try line_buffer.replaceRange(
+            arena,
+            next_col_offset,
+            line_buffer.items.len - prev_col_offset,
+            line_buffer.items[prev_col_offset..],
+        );
+
+        const new_len = line_buffer.items.len - (prev_col_offset - next_col_offset);
+        line_buffer.shrinkRetainingCapacity(new_len);
+
+        try setCursorColumn(stdout, prompt.len + next_col_offset);
+        try clearFromCursorToLineEnd(stdout);
+        try stdout.writeAll(line_buffer.items[next_col_offset..]);
+        try setCursorColumn(stdout, prompt.len + next_col_offset);
+        col_offset.* = next_col_offset;
+    } else {
+        const fmt = "Kitty protocol not supported: {s}";
+        try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset.*);
+    }
+}
+
+// History API
 
 pub fn using_history() void {
     is_using_history = true;
