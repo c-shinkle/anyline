@@ -417,36 +417,35 @@ fn handle_kitty_protocol(
         const prev_col_offset = @min(col_offset.* + 1, line_buffer.items.len);
         if (prev_col_offset == 0) return;
         std.debug.assert(line_buffer.items.len > 0);
-        var next_col_offset = prev_col_offset;
 
         const isAN = std.ascii.isAlphabetic;
-        if (!isAN(line_buffer.items[next_col_offset - 1])) {
-            while (next_col_offset > 0 and !isAN(line_buffer.items[next_col_offset - 1])) next_col_offset -= 1;
+        if (!isAN(line_buffer.items[col_offset.* - 1])) {
+            while (col_offset.* > 0 and !isAN(line_buffer.items[col_offset.* - 1]))
+                col_offset.* -= 1;
         }
-        while (next_col_offset > 0 and isAN(line_buffer.items[next_col_offset - 1])) {
-            next_col_offset -= 1;
+        while (col_offset.* > 0 and isAN(line_buffer.items[col_offset.* - 1])) {
+            col_offset.* -= 1;
         }
 
-        const duped_buffer = try arena.dupe(u8, line_buffer.items[next_col_offset..prev_col_offset]);
+        const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset.*..prev_col_offset]);
         try copy_stack.append(arena, duped_buffer);
 
         try line_buffer.replaceRange(
             arena,
-            next_col_offset,
+            col_offset.*,
             line_buffer.items.len - prev_col_offset,
             line_buffer.items[prev_col_offset..],
         );
 
-        const new_len = line_buffer.items.len - (prev_col_offset - next_col_offset);
+        const new_len = line_buffer.items.len - (prev_col_offset - col_offset.*);
         line_buffer.shrinkRetainingCapacity(new_len);
 
-        try setCursorColumn(stdout, prompt.len + next_col_offset);
+        try setCursorColumn(stdout, prompt.len + col_offset.*);
         try clearFromCursorToLineEnd(stdout);
-        try stdout.writeAll(line_buffer.items[next_col_offset..]);
-        try setCursorColumn(stdout, prompt.len + next_col_offset);
-        col_offset.* = next_col_offset;
+        try stdout.writeAll(line_buffer.items[col_offset.*..]);
+        try setCursorColumn(stdout, prompt.len + col_offset.*);
     } else {
-        const fmt = "Kitty protocol not supported: {s}";
+        const fmt = "Unhandled Kitty protocol: {s}";
         try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset.*);
     }
 }
