@@ -226,35 +226,37 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 } else {
                     switch (second_byte) {
                         'f' => {
-                            if (col_offset == line_buffer.items.len) continue;
+                            const len = line_buffer.items.len;
+                            if (col_offset == len) continue;
 
                             const isAN = std.ascii.isAlphanumeric;
-                            const was_an = isAN(line_buffer.items[col_offset]);
-
-                            var i = col_offset + 1;
-                            const len = line_buffer.items.len;
-                            if (was_an) {
-                                while (i < len and isAN(line_buffer.items[i])) i += 1;
-                            } else {
-                                while (i < len and !isAN(line_buffer.items[i])) i += 1;
+                            if (!isAN(line_buffer.items[col_offset])) {
+                                while (col_offset < len and !isAN(line_buffer.items[col_offset])) {
+                                    col_offset += 1;
+                                }
                             }
-                            col_offset = i;
+                            while (col_offset < len and isAN(line_buffer.items[col_offset])) {
+                                col_offset += 1;
+                            }
+
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
                         },
                         'b' => {
                             if (col_offset == 0) continue;
+                            std.debug.assert(line_buffer.items.len > 0);
 
-                            var i = @min(col_offset, line_buffer.items.len - 1);
                             const isAN = std.ascii.isAlphabetic;
-                            const was_an = isAN(line_buffer.items[i]);
-
-                            i -= 1;
-                            if (was_an) {
-                                while (i > 0 and isAN(line_buffer.items[i])) i -= 1;
-                            } else {
-                                while (i > 0 and !isAN(line_buffer.items[i])) i -= 1;
+                            if (!isAN(line_buffer.items[col_offset - 1])) {
+                                while (col_offset > 0 and
+                                    !isAN(line_buffer.items[col_offset - 1]))
+                                {
+                                    col_offset -= 1;
+                                }
                             }
-                            col_offset = i;
+                            while (col_offset > 0 and isAN(line_buffer.items[col_offset - 1])) {
+                                col_offset -= 1;
+                            }
+
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
                         },
                         else => {
