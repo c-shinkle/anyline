@@ -8,6 +8,7 @@ const CTRL_E = 0x05;
 const CTRL_F = 0x06;
 const CTRL_K = 0x0b;
 const CTRL_L = 0x0c;
+const CTRL_W = 0x17;
 const UP_ARROW = 'A';
 const DOWN_ARROW = 'B';
 const RIGHT_ARROW = 'C';
@@ -142,6 +143,37 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 try stdout_writer.interface.writeAll(prompt);
                 try stdout_writer.interface.writeAll(line_buffer.items);
 
+                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+            },
+            CTRL_W => {
+                const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
+                if (col_offset == 0) continue;
+                std.debug.assert(line_buffer.items.len > 0);
+
+                if (std.ascii.isWhitespace(line_buffer.items[col_offset - 1])) {
+                    while (col_offset > 0 and std.ascii.isWhitespace(line_buffer.items[col_offset - 1]))
+                        col_offset -= 1;
+                }
+                while (col_offset > 0 and !std.ascii.isWhitespace(line_buffer.items[col_offset - 1])) {
+                    col_offset -= 1;
+                }
+
+                const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..prev_col_offset]);
+                try copy_stack.append(arena, duped_buffer);
+
+                try line_buffer.replaceRange(
+                    arena,
+                    col_offset,
+                    line_buffer.items.len - prev_col_offset,
+                    line_buffer.items[prev_col_offset..],
+                );
+
+                const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
+                line_buffer.shrinkRetainingCapacity(new_len);
+
+                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try clearFromCursorToLineEnd(&stdout_writer.interface);
+                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
             std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
