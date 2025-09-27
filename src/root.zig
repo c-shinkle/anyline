@@ -1,5 +1,7 @@
 var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
+var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
+
 const CTRL_A = 0x01;
 const CTRL_B = 0x02;
 const CTRL_C = 0x03;
@@ -9,6 +11,7 @@ const CTRL_F = 0x06;
 const CTRL_K = 0x0b;
 const CTRL_L = 0x0c;
 const CTRL_W = 0x17;
+const CTRL_Y = 0x19;
 const UP_ARROW = 'A';
 const DOWN_ARROW = 'B';
 const RIGHT_ARROW = 'C';
@@ -47,17 +50,16 @@ pub const WriteHistoryError =
     std.fs.File.OpenError ||
     std.Io.Writer.Error;
 
-pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
+pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
-    var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
 
-    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
+    const temp = arena_allocator.allocator();
 
-    try history_entries.append(allocator, undefined);
+    try history_entries.append(outlive, undefined);
     defer _ = history_entries.pop();
     var history_index: usize = history_entries.items.len - 1;
 
@@ -111,8 +113,8 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 if (line_buffer.items.len == col_offset) {
                     continue;
                 }
-                const edited_line = try arena.dupe(u8, line_buffer.items);
-                try edit_stack.append(arena, edited_line);
+                const edited_line = try temp.dupe(u8, line_buffer.items);
+                try edit_stack.append(temp, edited_line);
 
                 _ = line_buffer.orderedRemove(col_offset);
 
@@ -129,8 +131,8 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
             CTRL_K => {
-                const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..]);
-                try copy_stack.append(allocator, duped_buffer);
+                const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..]);
+                try copy_stack.append(outlive, duped_buffer);
 
                 line_buffer.shrinkRetainingCapacity(col_offset);
 
@@ -158,11 +160,11 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                     col_offset -= 1;
                 }
 
-                const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..prev_col_offset]);
-                try copy_stack.append(arena, duped_buffer);
+                const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..prev_col_offset]);
+                try copy_stack.append(outlive, duped_buffer);
 
                 try line_buffer.replaceRange(
-                    arena,
+                    temp,
                     col_offset,
                     line_buffer.items.len - prev_col_offset,
                     line_buffer.items[prev_col_offset..],
@@ -176,6 +178,14 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
+            CTRL_Y => {
+                const copy = copy_stack.pop() orelse continue;
+                defer outlive.free(copy);
+
+                try line_buffer.insertSlice(temp, col_offset, copy);
+                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                col_offset += copy.len;
+            },
             std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
                 try stdout_writer.interface.writeByte('\n');
                 try stdout_writer.interface.flush();
@@ -186,13 +196,12 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                 if (bytes_read > 3) {
                     try handle_kitty_protocol(
-                        arena,
+                        outlive,
                         &stdout_writer.interface,
                         bytes_read,
                         stdin_buffer,
                         &col_offset,
                         &line_buffer,
-                        &copy_stack,
                         prompt,
                     );
                     continue;
@@ -209,7 +218,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                             if (history_index + 1 == history_entries.items.len) {
                                 history_entries.items[history_index] =
-                                    try arena.dupe(u8, line_buffer.items);
+                                    try temp.dupe(u8, line_buffer.items);
                             }
                             edit_stack.clearRetainingCapacity();
 
@@ -217,7 +226,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                             line_buffer.clearRetainingCapacity();
                             try line_buffer.appendSlice(
-                                arena,
+                                temp,
                                 history_entries.items[history_index],
                             );
 
@@ -237,7 +246,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                             line_buffer.clearRetainingCapacity();
                             try line_buffer.appendSlice(
-                                arena,
+                                temp,
                                 history_entries.items[history_index],
                             );
 
@@ -261,8 +270,8 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 continue;
                             }
 
-                            const edited_line = try arena.dupe(u8, line_buffer.items);
-                            try edit_stack.append(arena, edited_line);
+                            const edited_line = try temp.dupe(u8, line_buffer.items);
+                            try edit_stack.append(temp, edited_line);
 
                             _ = line_buffer.orderedRemove(col_offset);
                             try clearFromCursorToLineEnd(&stdout_writer.interface);
@@ -271,7 +280,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                         },
                         else => {
                             const fmt = "Unhandled control byte: {d}";
-                            try log(allocator, fmt, .{third_byte}, prompt.len + col_offset);
+                            try log(outlive, fmt, .{third_byte}, prompt.len + col_offset);
                         },
                     }
                 } else {
@@ -325,11 +334,11 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 word_offset += 1;
                             }
 
-                            const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset..word_offset]);
-                            try copy_stack.append(arena, duped_buffer);
+                            const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..word_offset]);
+                            try copy_stack.append(outlive, duped_buffer);
 
                             try line_buffer.replaceRange(
-                                arena,
+                                temp,
                                 col_offset,
                                 line_buffer.items.len - word_offset,
                                 line_buffer.items[word_offset..],
@@ -344,7 +353,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                         },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
-                            try log(allocator, fmt, .{second_byte}, prompt.len + col_offset);
+                            try log(outlive, fmt, .{second_byte}, prompt.len + col_offset);
                         },
                     }
                 }
@@ -355,7 +364,7 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 }
 
                 line_buffer.clearRetainingCapacity();
-                try line_buffer.appendSlice(arena, edit_stack.pop().?);
+                try line_buffer.appendSlice(temp, edit_stack.pop().?);
 
                 col_offset = @min(col_offset, line_buffer.items.len);
 
@@ -369,11 +378,11 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 // then you need to include a backstop for undo's
                 const is_last_entry = history_index + 1 == history_entries.items.len;
                 if (!is_last_entry and edit_stack.items.len == 0) {
-                    const duped_finished_line = try arena.dupe(u8, line_buffer.items);
-                    try edit_stack.append(arena, duped_finished_line);
+                    const duped_finished_line = try temp.dupe(u8, line_buffer.items);
+                    try edit_stack.append(temp, duped_finished_line);
                 }
 
-                try line_buffer.insert(arena, col_offset, print_byte);
+                try line_buffer.insert(temp, col_offset, print_byte);
                 try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
 
                 col_offset += 1;
@@ -383,8 +392,8 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 if (col_offset == 0) {
                     continue;
                 }
-                const copied_line = try arena.dupe(u8, line_buffer.items);
-                try edit_stack.append(arena, copied_line);
+                const copied_line = try temp.dupe(u8, line_buffer.items);
+                try edit_stack.append(temp, copied_line);
 
                 col_offset -= 1;
                 _ = line_buffer.orderedRemove(col_offset);
@@ -396,12 +405,12 @@ pub fn readline(allocator: Allocator, prompt: []const u8) ReadlineError![]u8 {
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
-                try log(allocator, fmt, .{unknown_byte}, prompt.len + col_offset);
+                try log(outlive, fmt, .{unknown_byte}, prompt.len + col_offset);
             },
         }
     }
 
-    return try allocator.dupe(u8, line_buffer.items);
+    return try outlive.dupe(u8, line_buffer.items);
 }
 
 fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
@@ -431,13 +440,12 @@ fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usiz
 }
 
 fn handle_kitty_protocol(
-    arena: std.mem.Allocator,
+    outlive: std.mem.Allocator,
     stdout: *std.Io.Writer,
     bytes_read: usize,
     stdin_buffer: [8]u8,
     col_offset: *usize,
     line_buffer: *std.ArrayListUnmanaged(u8),
-    copy_stack: *std.ArrayListUnmanaged([]const u8),
     prompt: []const u8,
 ) !void {
     if (bytes_read >= 6 and
@@ -459,11 +467,11 @@ fn handle_kitty_protocol(
             col_offset.* -= 1;
         }
 
-        const duped_buffer = try arena.dupe(u8, line_buffer.items[col_offset.*..prev_col_offset]);
-        try copy_stack.append(arena, duped_buffer);
+        const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset.*..prev_col_offset]);
+        try copy_stack.append(outlive, duped_buffer);
 
         try line_buffer.replaceRange(
-            arena,
+            outlive,
             col_offset.*,
             line_buffer.items.len - prev_col_offset,
             line_buffer.items[prev_col_offset..],
@@ -478,7 +486,7 @@ fn handle_kitty_protocol(
         try setCursorColumn(stdout, prompt.len + col_offset.*);
     } else {
         const fmt = "Unhandled Kitty protocol: {s}";
-        try log(arena, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset.*);
+        try log(outlive, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset.*);
     }
 }
 
