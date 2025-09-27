@@ -18,7 +18,7 @@ const RIGHT_ARROW = 'C';
 const LEFT_ARROW = 'D';
 const DEL = '3';
 const UNDERSCORE = 0x1F;
-const BACK_SPACE = 0x7F;
+const BACKSPACE = 0x7F;
 
 const esc = "\x1B";
 const csi = esc ++ "[";
@@ -284,6 +284,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                         },
                     }
                 } else {
+                    // Meta
                     switch (second_byte) {
                         'f' => {
                             const len = line_buffer.items.len;
@@ -351,6 +352,17 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
                             try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
                         },
+                        'y' => {
+                            const first = copy_stack.pop() orelse continue;
+                            try copy_stack.insert(outlive, 0, first);
+
+                            const copy = copy_stack.pop().?;
+                            defer outlive.free(copy);
+
+                            try line_buffer.insertSlice(temp, col_offset, copy);
+                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                            col_offset += copy.len;
+                        },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
                             try log(outlive, fmt, .{second_byte}, prompt.len + col_offset);
@@ -388,7 +400,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 col_offset += 1;
                 try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
             },
-            BACK_SPACE => {
+            BACKSPACE => {
                 if (col_offset == 0) {
                     continue;
                 }
