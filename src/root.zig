@@ -193,17 +193,9 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
             },
             std.ascii.control_code.esc => {
                 if (bytes_read == 1) continue;
-
-                if (bytes_read > 3) {
-                    try handle_kitty_protocol(
-                        outlive,
-                        &stdout_writer.interface,
-                        bytes_read,
-                        stdin_buffer,
-                        &col_offset,
-                        &line_buffer,
-                        prompt,
-                    );
+                if (bytes_read > 4) {
+                    const fmt = "Kitty protocol not supported: {s}";
+                    try log(outlive, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
                     continue;
                 }
 
@@ -363,6 +355,39 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
                             col_offset += copy.len;
                         },
+                        std.ascii.control_code.del => {
+                            const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
+                            if (prev_col_offset == 0) continue;
+                            std.debug.assert(line_buffer.items.len > 0);
+
+                            const isAN = std.ascii.isAlphabetic;
+                            if (!isAN(line_buffer.items[col_offset - 1])) {
+                                while (col_offset > 0 and !isAN(line_buffer.items[col_offset - 1]))
+                                    col_offset -= 1;
+                            }
+                            while (col_offset > 0 and isAN(line_buffer.items[col_offset - 1])) {
+                                col_offset -= 1;
+                            }
+
+                            const copy = line_buffer.items[col_offset..prev_col_offset];
+                            const duped_buffer = try outlive.dupe(u8, copy);
+                            try copy_stack.append(outlive, duped_buffer);
+
+                            try line_buffer.replaceRange(
+                                outlive,
+                                col_offset,
+                                line_buffer.items.len - prev_col_offset,
+                                line_buffer.items[prev_col_offset..],
+                            );
+
+                            const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
+                            line_buffer.shrinkRetainingCapacity(new_len);
+
+                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(&stdout_writer.interface);
+                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                        },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
                             try log(outlive, fmt, .{second_byte}, prompt.len + col_offset);
@@ -449,57 +474,6 @@ fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usiz
     try setCursorColumn(&stdout_writer.interface, max_col - msg.len);
     try stdout_writer.interface.writeAll(msg);
     try setCursorColumn(&stdout_writer.interface, prev_col);
-}
-
-fn handle_kitty_protocol(
-    outlive: std.mem.Allocator,
-    stdout: *std.Io.Writer,
-    bytes_read: usize,
-    stdin_buffer: [8]u8,
-    col_offset: *usize,
-    line_buffer: *std.ArrayListUnmanaged(u8),
-    prompt: []const u8,
-) !void {
-    if (bytes_read >= 6 and
-        stdin_buffer[2] == '3' and
-        stdin_buffer[3] == ';' and
-        stdin_buffer[4] == '3' and
-        stdin_buffer[5] == '~')
-    {
-        const prev_col_offset = @min(col_offset.* + 1, line_buffer.items.len);
-        if (prev_col_offset == 0) return;
-        std.debug.assert(line_buffer.items.len > 0);
-
-        const isAN = std.ascii.isAlphabetic;
-        if (!isAN(line_buffer.items[col_offset.* - 1])) {
-            while (col_offset.* > 0 and !isAN(line_buffer.items[col_offset.* - 1]))
-                col_offset.* -= 1;
-        }
-        while (col_offset.* > 0 and isAN(line_buffer.items[col_offset.* - 1])) {
-            col_offset.* -= 1;
-        }
-
-        const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset.*..prev_col_offset]);
-        try copy_stack.append(outlive, duped_buffer);
-
-        try line_buffer.replaceRange(
-            outlive,
-            col_offset.*,
-            line_buffer.items.len - prev_col_offset,
-            line_buffer.items[prev_col_offset..],
-        );
-
-        const new_len = line_buffer.items.len - (prev_col_offset - col_offset.*);
-        line_buffer.shrinkRetainingCapacity(new_len);
-
-        try setCursorColumn(stdout, prompt.len + col_offset.*);
-        try clearFromCursorToLineEnd(stdout);
-        try stdout.writeAll(line_buffer.items[col_offset.*..]);
-        try setCursorColumn(stdout, prompt.len + col_offset.*);
-    } else {
-        const fmt = "Unhandled Kitty protocol: {s}";
-        try log(outlive, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset.*);
-    }
 }
 
 // History API
