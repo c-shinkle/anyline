@@ -51,6 +51,15 @@ pub const WriteHistoryError =
     std.Io.Writer.Error;
 
 pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
+
+    const stdin_file = std.fs.File.stdin();
+
+    return helper(outlive, prompt, &stdout_writer.interface, stdin_file);
+}
+
+fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin: std.fs.File) ![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
@@ -75,31 +84,26 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
         else => unreachable,
     };
 
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
-
-    var stdin_file = std.fs.File.stdin();
-
     // Windows needs the following two lines to prevent garbage writes to the terminal
-    try setCursorColumn(&stdout_writer.interface, 0);
-    try clearFromCursorToLineEnd(&stdout_writer.interface);
-    try stdout_writer.interface.writeAll(prompt);
-    try stdout_writer.interface.flush();
+    try setCursorColumn(stdout, 0);
+    try clearFromCursorToLineEnd(stdout);
+    try stdout.writeAll(prompt);
+    try stdout.flush();
 
-    while (true) : (try stdout_writer.interface.flush()) {
+    while (true) : (try stdout.flush()) {
         var stdin_buffer: [8]u8 = undefined;
-        const bytes_read = try stdin_file.read(&stdin_buffer);
+        const bytes_read = try stdin.read(&stdin_buffer);
         std.debug.assert(bytes_read > 0);
 
         const first_byte = stdin_buffer[0];
         switch (first_byte) {
             CTRL_A => {
                 col_offset = 0;
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_B => {
                 col_offset -|= 1;
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_C => {
                 std.debug.assert(builtin.os.tag == .windows);
@@ -107,7 +111,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
             },
             CTRL_D => {
                 if (line_buffer.items.len == 0) {
-                    try stdout_writer.interface.writeByte('\n');
+                    try stdout.writeByte('\n');
                     break;
                 }
                 if (line_buffer.items.len == col_offset) {
@@ -118,17 +122,17 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                try stdout_writer.interface.writeByte(' ');
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeByte(' ');
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_E => {
                 col_offset = line_buffer.items.len;
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_F => {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_K => {
                 const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..]);
@@ -136,16 +140,16 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                 line_buffer.shrinkRetainingCapacity(col_offset);
 
-                try clearFromCursorToLineEnd(&stdout_writer.interface);
+                try clearFromCursorToLineEnd(stdout);
             },
             CTRL_L => {
-                try clearEntireScreen(&stdout_writer.interface);
-                try setCursor(&stdout_writer.interface, 0, 0);
+                try clearEntireScreen(stdout);
+                try setCursor(stdout, 0, 0);
 
-                try stdout_writer.interface.writeAll(prompt);
-                try stdout_writer.interface.writeAll(line_buffer.items);
+                try stdout.writeAll(prompt);
+                try stdout.writeAll(line_buffer.items);
 
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_W => {
                 const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
@@ -173,22 +177,22 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
                 line_buffer.shrinkRetainingCapacity(new_len);
 
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
-                try clearFromCursorToLineEnd(&stdout_writer.interface);
-                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
+                try clearFromCursorToLineEnd(stdout);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             CTRL_Y => {
                 const copy = copy_stack.pop() orelse continue;
                 defer outlive.free(copy);
 
                 try line_buffer.insertSlice(temp, col_offset, copy);
-                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
                 col_offset += copy.len;
             },
             std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
-                try stdout_writer.interface.writeByte('\n');
-                try stdout_writer.interface.flush();
+                try stdout.writeByte('\n');
+                try stdout.flush();
                 break;
             },
             std.ascii.control_code.esc => {
@@ -222,9 +226,9 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 history_entries.items[history_index],
                             );
 
-                            try setCursorColumn(&stdout_writer.interface, prompt.len);
-                            try clearFromCursorToLineEnd(&stdout_writer.interface);
-                            try stdout_writer.interface.writeAll(line_buffer.items);
+                            try setCursorColumn(stdout, prompt.len);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
                         DOWN_ARROW => {
@@ -242,18 +246,18 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 history_entries.items[history_index],
                             );
 
-                            try setCursorColumn(&stdout_writer.interface, prompt.len);
-                            try clearFromCursorToLineEnd(&stdout_writer.interface);
-                            try stdout_writer.interface.writeAll(line_buffer.items);
+                            try setCursorColumn(stdout, prompt.len);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
                         RIGHT_ARROW => {
                             col_offset = @min(col_offset + 1, line_buffer.items.len);
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         LEFT_ARROW => {
                             col_offset -|= 1;
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         DEL => {
                             std.debug.assert('~' == stdin_buffer[3]);
@@ -266,9 +270,9 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             try edit_stack.append(temp, edited_line);
 
                             _ = line_buffer.orderedRemove(col_offset);
-                            try clearFromCursorToLineEnd(&stdout_writer.interface);
-                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         else => {
                             const fmt = "Unhandled control byte: {d}";
@@ -292,7 +296,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 col_offset += 1;
                             }
 
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         'b' => {
                             if (col_offset == 0) continue;
@@ -310,7 +314,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                                 col_offset -= 1;
                             }
 
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         'd' => {
                             var word_offset = col_offset;
@@ -340,9 +344,9 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             const new_len = line_buffer.items.len - (word_offset - col_offset);
                             line_buffer.shrinkRetainingCapacity(new_len);
 
-                            try clearFromCursorToLineEnd(&stdout_writer.interface);
-                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         'y' => {
                             const first = copy_stack.pop() orelse continue;
@@ -352,7 +356,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             defer outlive.free(copy);
 
                             try line_buffer.insertSlice(temp, col_offset, copy);
-                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                            try stdout.writeAll(line_buffer.items[col_offset..]);
                             col_offset += copy.len;
                         },
                         std.ascii.control_code.del => {
@@ -383,10 +387,10 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                             const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
                             line_buffer.shrinkRetainingCapacity(new_len);
 
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
-                            try clearFromCursorToLineEnd(&stdout_writer.interface);
-                            try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(stdout);
+                            try stdout.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(stdout, prompt.len + col_offset);
                         },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
@@ -405,10 +409,10 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
 
                 col_offset = @min(col_offset, line_buffer.items.len);
 
-                try setCursorColumn(&stdout_writer.interface, prompt.len);
-                try clearFromCursorToLineEnd(&stdout_writer.interface);
-                try stdout_writer.interface.writeAll(line_buffer.items);
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len);
+                try clearFromCursorToLineEnd(stdout);
+                try stdout.writeAll(line_buffer.items);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             ' '...'~' => |print_byte| {
                 // If you are editting a line that was populated from history,
@@ -420,10 +424,10 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 }
 
                 try line_buffer.insert(temp, col_offset, print_byte);
-                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
 
                 col_offset += 1;
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             BACKSPACE => {
                 if (col_offset == 0) {
@@ -435,10 +439,10 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
                 col_offset -= 1;
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
-                try stdout_writer.interface.writeAll(line_buffer.items[col_offset..]);
-                try stdout_writer.interface.writeByte(' ');
-                try setCursorColumn(&stdout_writer.interface, prompt.len + col_offset);
+                try setCursorColumn(stdout, prompt.len + col_offset);
+                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try stdout.writeByte(' ');
+                try setCursorColumn(stdout, prompt.len + col_offset);
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
