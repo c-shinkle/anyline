@@ -48,7 +48,7 @@ pub const AddHistoryError = Allocator.Error;
 pub const WriteHistoryError =
     std.process.GetEnvVarOwnedError ||
     std.fs.File.OpenError ||
-    std.Io.Writer.Error;
+    std.fs.File.WriteError;
 
 pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
@@ -492,12 +492,7 @@ pub fn add_history(alloc: Allocator, line: []const u8) AddHistoryError!void {
 }
 
 pub fn write_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) WriteHistoryError!void {
-    defer {
-        for (history_entries.items) |entry| {
-            alloc.free(entry);
-        }
-        history_entries.clearAndFree(alloc);
-    }
+    defer free_history(alloc);
     const file = if (maybe_absolute_path) |absolute_path|
         try std.fs.openFileAbsolute(absolute_path, std.fs.File.OpenFlags{ .mode = .write_only })
     else
@@ -507,10 +502,14 @@ pub fn write_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) WriteHi
     const all_entries = try std.mem.join(alloc, new_line, history_entries.items);
     defer alloc.free(all_entries);
 
-    var buffer: [1024]u8 = undefined;
-    var writer = file.writerStreaming(&buffer);
-    try writer.interface.writeAll(all_entries);
-    try writer.interface.flush();
+    try file.writeAll(all_entries);
+}
+
+fn free_history(alloc: Allocator) void {
+    for (history_entries.items) |entry| {
+        alloc.free(entry);
+    }
+    history_entries.clearAndFree(alloc);
 }
 
 pub fn read_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) !void {
@@ -596,10 +595,7 @@ test "Print characters" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdf", line);
@@ -638,10 +634,7 @@ test "Move forward and backward" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("dfasgh", line);
@@ -673,10 +666,7 @@ test "Backspace" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("as", line);
@@ -713,10 +703,7 @@ test "Delete (key)" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("df", line);
@@ -754,10 +741,7 @@ test "Undo" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdf", line);
@@ -793,10 +777,7 @@ test "Move to start of line" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("ghjkasdf", line);
@@ -837,10 +818,7 @@ test "Move to end of line" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdfghjk", line);
@@ -881,10 +859,7 @@ test "Move forward a word" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdfghjk", line);
@@ -926,10 +901,7 @@ test "Move forward to non-alphanumeric" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdfqwer;lkj", line);
@@ -965,10 +937,7 @@ test "Move backward a word" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("ghjkasdf", line);
@@ -1009,10 +978,7 @@ test "Move backward to non-alphanumeric" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdf;qwerlkj", line);
@@ -1043,10 +1009,7 @@ test "Clear line" {
     const line = try helper(outlive, "", &out.writer, in);
     defer {
         outlive.free(line);
-        for (history_entries.items) |entry| {
-            outlive.free(entry);
-        }
-        history_entries.clearAndFree(outlive);
+        free_history(outlive);
     }
 
     try std.testing.expectEqualStrings("asdf", line);
