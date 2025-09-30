@@ -276,7 +276,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                         },
                         else => {
                             const fmt = "Unhandled control byte: {d}";
-                            try log(outlive, fmt, .{third_byte}, prompt.len + col_offset);
+                            try log(outlive, out, fmt, .{third_byte}, prompt.len + col_offset);
                         },
                     }
                 } else {
@@ -394,7 +394,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                         },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
-                            try log(outlive, fmt, .{second_byte}, prompt.len + col_offset);
+                            try log(outlive, out, fmt, .{second_byte}, prompt.len + col_offset);
                         },
                     }
                 }
@@ -446,7 +446,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
-                try log(outlive, fmt, .{unknown_byte}, prompt.len + col_offset);
+                try log(outlive, out, fmt, .{unknown_byte}, prompt.len + col_offset);
             },
         }
     }
@@ -454,15 +454,13 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
     return try outlive.dupe(u8, line_buffer.items);
 }
 
-fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
+fn log(alloc: Allocator, out: *std.Io.Writer, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
     if (!(builtin.mode == .Debug)) return;
 
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
-
     const max_col = max_col: {
-        try setCursorColumn(&stdout_writer.interface, 999);
-        try queryCursorPosition(&stdout_writer.interface);
-        try stdout_writer.interface.flush();
+        try setCursorColumn(out, 999);
+        try queryCursorPosition(out);
+        try out.flush();
 
         var buffer: [32]u8 = undefined;
         var reader = std.fs.File.stdin().readerStreaming(&buffer);
@@ -475,9 +473,9 @@ fn log(alloc: Allocator, comptime fmt: []const u8, args: anytype, prev_col: usiz
 
     const msg = try std.fmt.allocPrint(alloc, fmt, args);
     defer alloc.free(msg);
-    try setCursorColumn(&stdout_writer.interface, max_col - msg.len);
-    try stdout_writer.interface.writeAll(msg);
-    try setCursorColumn(&stdout_writer.interface, prev_col);
+    try setCursorColumn(out, max_col - msg.len);
+    try out.writeAll(msg);
+    try setCursorColumn(out, prev_col);
 }
 
 // History API
@@ -573,10 +571,12 @@ fn queryCursorPosition(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "6n");
 }
 
+// Testing
+
 test "Print characters" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -603,8 +603,8 @@ test "Print characters" {
 
 test "Move forward and backward" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -642,8 +642,8 @@ test "Move forward and backward" {
 
 test "Backspace" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -674,8 +674,8 @@ test "Backspace" {
 
 test "Delete (key)" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -711,8 +711,8 @@ test "Delete (key)" {
 
 test "Undo" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -749,8 +749,8 @@ test "Undo" {
 
 test "Move to start of line" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -785,8 +785,8 @@ test "Move to start of line" {
 
 test "Move to end of line" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -826,8 +826,8 @@ test "Move to end of line" {
 
 test "Move forward a word" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -867,8 +867,8 @@ test "Move forward a word" {
 
 test "Move forward to non-alphanumeric" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -909,8 +909,8 @@ test "Move forward to non-alphanumeric" {
 
 test "Move backward a word" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -945,8 +945,8 @@ test "Move backward a word" {
 
 test "Move backward to non-alphanumeric" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -986,8 +986,8 @@ test "Move backward to non-alphanumeric" {
 
 test "Clear line" {
     const outlive = std.testing.allocator;
-    var out = std.Io.Writer.Allocating.init(outlive);
-    defer out.deinit();
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
 
     var pipe_fds: [2]c_int = undefined;
     try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
@@ -1021,7 +1021,7 @@ fn inputStdin(fd: c_int, input: []const u8) !void {
     try std.testing.expect(-1 != unistd.write(fd, &buffer, 8));
 }
 
-// try log(allocator, "stdin: {d:0>3}, {d}, {d}, {d}, {d}, {d}, {d}, {d}", .{ stdin_buffer[0], stdin_buffer[1], stdin_buffer[2], stdin_buffer[3], stdin_buffer[4], stdin_buffer[5], stdin_buffer[6], stdin_buffer[7] }, prompt.len + col_offset);
+// try log(allocator, out, "stdin: {d:0>3}, {d}, {d}, {d}, {d}, {d}, {d}, {d}", .{ stdin_buffer[0], stdin_buffer[1], stdin_buffer[2], stdin_buffer[3], stdin_buffer[4], stdin_buffer[5], stdin_buffer[6], stdin_buffer[7] }, prompt.len + col_offset);
 
 const std = @import("std");
 const control_code = std.ascii.control_code;
