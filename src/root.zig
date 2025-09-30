@@ -59,7 +59,7 @@ pub fn readline(outlive: Allocator, prompt: []const u8) ReadlineError![]u8 {
     return helper(outlive, prompt, &stdout_writer.interface, stdin_file);
 }
 
-fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin: std.fs.File) ![]u8 {
+fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ![]u8 {
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
@@ -85,25 +85,25 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
     };
 
     // Windows needs the following two lines to prevent garbage writes to the terminal
-    try setCursorColumn(stdout, 0);
-    try clearFromCursorToLineEnd(stdout);
-    try stdout.writeAll(prompt);
-    try stdout.flush();
+    try setCursorColumn(out, 0);
+    try clearFromCursorToLineEnd(out);
+    try out.writeAll(prompt);
+    try out.flush();
 
-    while (true) : (try stdout.flush()) {
-        var stdin_buffer: [8]u8 = undefined;
-        const bytes_read = try stdin.read(&stdin_buffer);
+    while (true) : (try out.flush()) {
+        var in_buffer: [8]u8 = undefined;
+        const bytes_read = try in.read(&in_buffer);
         std.debug.assert(bytes_read > 0);
 
-        const first_byte = stdin_buffer[0];
+        const first_byte = in_buffer[0];
         switch (first_byte) {
             CTRL_A => {
                 col_offset = 0;
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_B => {
                 col_offset -|= 1;
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_C => {
                 std.debug.assert(builtin.os.tag == .windows);
@@ -111,7 +111,7 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
             },
             CTRL_D => {
                 if (line_buffer.items.len == 0) {
-                    try stdout.writeByte('\n');
+                    try out.writeByte('\n');
                     break;
                 }
                 if (line_buffer.items.len == col_offset) {
@@ -122,17 +122,17 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
 
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try stdout.writeAll(line_buffer.items[col_offset..]);
-                try stdout.writeByte(' ');
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try out.writeAll(line_buffer.items[col_offset..]);
+                try out.writeByte(' ');
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_E => {
                 col_offset = line_buffer.items.len;
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_F => {
                 col_offset = @min(col_offset + 1, line_buffer.items.len);
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_K => {
                 const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..]);
@@ -140,16 +140,16 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
 
                 line_buffer.shrinkRetainingCapacity(col_offset);
 
-                try clearFromCursorToLineEnd(stdout);
+                try clearFromCursorToLineEnd(out);
             },
             CTRL_L => {
-                try clearEntireScreen(stdout);
-                try setCursor(stdout, 0, 0);
+                try clearEntireScreen(out);
+                try setCursor(out, 0, 0);
 
-                try stdout.writeAll(prompt);
-                try stdout.writeAll(line_buffer.items);
+                try out.writeAll(prompt);
+                try out.writeAll(line_buffer.items);
 
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_W => {
                 const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
@@ -177,35 +177,35 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                 const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
                 line_buffer.shrinkRetainingCapacity(new_len);
 
-                try setCursorColumn(stdout, prompt.len + col_offset);
-                try clearFromCursorToLineEnd(stdout);
-                try stdout.writeAll(line_buffer.items[col_offset..]);
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
+                try clearFromCursorToLineEnd(out);
+                try out.writeAll(line_buffer.items[col_offset..]);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_Y => {
                 const copy = copy_stack.pop() orelse continue;
                 defer outlive.free(copy);
 
                 try line_buffer.insertSlice(temp, col_offset, copy);
-                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try out.writeAll(line_buffer.items[col_offset..]);
                 col_offset += copy.len;
             },
-            std.ascii.control_code.lf, std.ascii.control_code.cr => { // ENTER
-                try stdout.writeByte('\n');
-                try stdout.flush();
+            control_code.lf, control_code.cr => { // ENTER
+                try out.writeByte('\n');
+                try out.flush();
                 break;
             },
-            std.ascii.control_code.esc => {
+            control_code.esc => {
                 if (bytes_read == 1) continue;
-                if (bytes_read > 4) {
-                    const fmt = "Kitty protocol not supported: {s}";
-                    try log(outlive, fmt, .{stdin_buffer[2..8]}, prompt.len + col_offset);
-                    continue;
-                }
+                // if (bytes_read > 4) {
+                //     const fmt = "Kitty protocol not supported: {s}";
+                //     try log(outlive, fmt, .{in_buffer[2..8]}, prompt.len + col_offset);
+                //     continue;
+                // }
 
-                const second_byte = stdin_buffer[1];
+                const second_byte = in_buffer[1];
                 if ('[' == second_byte) {
-                    const third_byte = stdin_buffer[2];
+                    const third_byte = in_buffer[2];
                     switch (third_byte) {
                         UP_ARROW => {
                             if (!is_using_history or history_index == 0) {
@@ -226,9 +226,9 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                                 history_entries.items[history_index],
                             );
 
-                            try setCursorColumn(stdout, prompt.len);
-                            try clearFromCursorToLineEnd(stdout);
-                            try stdout.writeAll(line_buffer.items);
+                            try setCursorColumn(out, prompt.len);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
                         DOWN_ARROW => {
@@ -246,21 +246,21 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                                 history_entries.items[history_index],
                             );
 
-                            try setCursorColumn(stdout, prompt.len);
-                            try clearFromCursorToLineEnd(stdout);
-                            try stdout.writeAll(line_buffer.items);
+                            try setCursorColumn(out, prompt.len);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items);
                             col_offset = line_buffer.items.len;
                         },
                         RIGHT_ARROW => {
                             col_offset = @min(col_offset + 1, line_buffer.items.len);
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         LEFT_ARROW => {
                             col_offset -|= 1;
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         DEL => {
-                            std.debug.assert('~' == stdin_buffer[3]);
+                            std.debug.assert('~' == in_buffer[3]);
 
                             if (line_buffer.items.len == col_offset) {
                                 continue;
@@ -270,9 +270,9 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                             try edit_stack.append(temp, edited_line);
 
                             _ = line_buffer.orderedRemove(col_offset);
-                            try clearFromCursorToLineEnd(stdout);
-                            try stdout.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         else => {
                             const fmt = "Unhandled control byte: {d}";
@@ -296,7 +296,7 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                                 col_offset += 1;
                             }
 
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         'b' => {
                             if (col_offset == 0) continue;
@@ -314,7 +314,7 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                                 col_offset -= 1;
                             }
 
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         'd' => {
                             var word_offset = col_offset;
@@ -344,9 +344,9 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                             const new_len = line_buffer.items.len - (word_offset - col_offset);
                             line_buffer.shrinkRetainingCapacity(new_len);
 
-                            try clearFromCursorToLineEnd(stdout);
-                            try stdout.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         'y' => {
                             const first = copy_stack.pop() orelse continue;
@@ -356,10 +356,10 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                             defer outlive.free(copy);
 
                             try line_buffer.insertSlice(temp, col_offset, copy);
-                            try stdout.writeAll(line_buffer.items[col_offset..]);
+                            try out.writeAll(line_buffer.items[col_offset..]);
                             col_offset += copy.len;
                         },
-                        std.ascii.control_code.del => {
+                        control_code.del => {
                             const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
                             if (prev_col_offset == 0) continue;
                             std.debug.assert(line_buffer.items.len > 0);
@@ -387,10 +387,10 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                             const new_len = line_buffer.items.len - (prev_col_offset - col_offset);
                             line_buffer.shrinkRetainingCapacity(new_len);
 
-                            try setCursorColumn(stdout, prompt.len + col_offset);
-                            try clearFromCursorToLineEnd(stdout);
-                            try stdout.writeAll(line_buffer.items[col_offset..]);
-                            try setCursorColumn(stdout, prompt.len + col_offset);
+                            try setCursorColumn(out, prompt.len + col_offset);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items[col_offset..]);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         else => {
                             const fmt = "Unhandled meta byte: {d}";
@@ -409,10 +409,10 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
 
                 col_offset = @min(col_offset, line_buffer.items.len);
 
-                try setCursorColumn(stdout, prompt.len);
-                try clearFromCursorToLineEnd(stdout);
-                try stdout.writeAll(line_buffer.items);
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len);
+                try clearFromCursorToLineEnd(out);
+                try out.writeAll(line_buffer.items);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             ' '...'~' => |print_byte| {
                 // If you are editting a line that was populated from history,
@@ -424,10 +424,10 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                 }
 
                 try line_buffer.insert(temp, col_offset, print_byte);
-                try stdout.writeAll(line_buffer.items[col_offset..]);
+                try out.writeAll(line_buffer.items[col_offset..]);
 
                 col_offset += 1;
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             BACKSPACE => {
                 if (col_offset == 0) {
@@ -439,10 +439,10 @@ fn helper(outlive: Allocator, prompt: []const u8, stdout: *std.Io.Writer, stdin:
                 col_offset -= 1;
                 _ = line_buffer.orderedRemove(col_offset);
 
-                try setCursorColumn(stdout, prompt.len + col_offset);
-                try stdout.writeAll(line_buffer.items[col_offset..]);
-                try stdout.writeByte(' ');
-                try setCursorColumn(stdout, prompt.len + col_offset);
+                try setCursorColumn(out, prompt.len + col_offset);
+                try out.writeAll(line_buffer.items[col_offset..]);
+                try out.writeByte(' ');
+                try setCursorColumn(out, prompt.len + col_offset);
             },
             else => |unknown_byte| {
                 const fmt = "Unhandled character: {d}";
@@ -574,6 +574,490 @@ fn queryCursorPosition(writer: *std.Io.Writer) !void {
     try writer.writeAll(csi ++ "6n");
 }
 
+test "Print characters" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf", line);
+}
+
+test "Move forward and backward" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_F});
+    try inputStdin(fd, &.{CTRL_F});
+
+    try inputStdin(fd, "g");
+    try inputStdin(fd, "h");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("dfasgh", line);
+}
+
+test "Backspace" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{BACKSPACE});
+    try inputStdin(fd, &.{BACKSPACE});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("as", line);
+}
+
+test "Delete (key)" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{ control_code.esc, '[', DEL, '~' });
+    try inputStdin(fd, &.{ control_code.esc, '[', DEL, '~' });
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("df", line);
+}
+
+test "Undo" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{ control_code.esc, '[', DEL, '~' });
+
+    try inputStdin(fd, &.{UNDERSCORE});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf", line);
+}
+
+test "Move to start of line" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_A});
+
+    try inputStdin(fd, "g");
+    try inputStdin(fd, "h");
+    try inputStdin(fd, "j");
+    try inputStdin(fd, "k");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("ghjkasdf", line);
+}
+
+test "Move to end of line" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{CTRL_E});
+
+    try inputStdin(fd, "g");
+    try inputStdin(fd, "h");
+    try inputStdin(fd, "j");
+    try inputStdin(fd, "k");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdfghjk", line);
+}
+
+test "Move forward a word" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{ control_code.esc, 'f' });
+
+    try inputStdin(fd, "g");
+    try inputStdin(fd, "h");
+    try inputStdin(fd, "j");
+    try inputStdin(fd, "k");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdfghjk", line);
+}
+
+test "Move forward to non-alphanumeric" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, ";");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{CTRL_A});
+    try inputStdin(fd, &.{ control_code.esc, 'f' });
+
+    try inputStdin(fd, "q");
+    try inputStdin(fd, "w");
+    try inputStdin(fd, "e");
+    try inputStdin(fd, "r");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdfqwer;lkj", line);
+}
+
+test "Move backward a word" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{ control_code.esc, 'b' });
+
+    try inputStdin(fd, "g");
+    try inputStdin(fd, "h");
+    try inputStdin(fd, "j");
+    try inputStdin(fd, "k");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("ghjkasdf", line);
+}
+
+test "Move backward to non-alphanumeric" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, ";");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{ control_code.esc, 'b' });
+
+    try inputStdin(fd, "q");
+    try inputStdin(fd, "w");
+    try inputStdin(fd, "e");
+    try inputStdin(fd, "r");
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf;qwerlkj", line);
+}
+
+test "Clear line" {
+    const outlive = std.testing.allocator;
+    var out = std.Io.Writer.Allocating.init(outlive);
+    defer out.deinit();
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_L});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        for (history_entries.items) |entry| {
+            outlive.free(entry);
+        }
+        history_entries.clearAndFree(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf", line);
+}
+
+fn inputStdin(fd: c_int, input: []const u8) !void {
+    var buffer: [8]u8 = undefined;
+    std.mem.copyForwards(u8, &buffer, input);
+    try std.testing.expect(-1 != unistd.write(fd, &buffer, 8));
+}
+
 // try log(allocator, "stdin: {d:0>3}, {d}, {d}, {d}, {d}, {d}, {d}, {d}", .{ stdin_buffer[0], stdin_buffer[1], stdin_buffer[2], stdin_buffer[3], stdin_buffer[4], stdin_buffer[5], stdin_buffer[6], stdin_buffer[7] }, prompt.len + col_offset);
 
 const std = @import("std");
@@ -586,3 +1070,5 @@ const Linux = @import("Linux.zig");
 const MacOs = @import("MacOS.zig");
 const Windows = @import("Windows.zig");
 const FreeBSD = @import("FreeBSD.zig");
+
+const unistd = @cImport(@cInclude("unistd.h"));
