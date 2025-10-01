@@ -1,6 +1,6 @@
 var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
-var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
+var kill_ring = Deque([]const u8).empty;
 
 const CTRL_A = 0x01;
 const CTRL_B = 0x02;
@@ -143,7 +143,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
             },
             CTRL_K => {
                 const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..]);
-                try copy_stack.append(outlive, duped_buffer);
+                try kill_ring.pushFront(outlive, duped_buffer);
 
                 line_buffer.shrinkRetainingCapacity(col_offset);
 
@@ -172,7 +172,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                 }
 
                 const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..prev_col_offset]);
-                try copy_stack.append(outlive, duped_buffer);
+                try kill_ring.pushFront(outlive, duped_buffer);
 
                 try line_buffer.replaceRange(
                     temp,
@@ -190,13 +190,13 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                 try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_Y => {
-                if (copy_stack.items.len == 0) {
+                if (kill_ring.len == 0) {
                     try out.writeByte(control_code.bel);
                     bytes_read = 0;
                     continue;
                 }
 
-                const copy = copy_stack.getLast();
+                const copy = kill_ring.front().?;
                 try line_buffer.insertSlice(temp, col_offset, copy);
                 try out.writeAll(line_buffer.items[col_offset..]);
                 col_offset += copy.len;
@@ -338,7 +338,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                             }
 
                             const killed_text = try outlive.dupe(u8, line_buffer.items[col_offset..word_offset]);
-                            try copy_stack.append(outlive, killed_text);
+                            try kill_ring.pushFront(outlive, killed_text);
 
                             for (col_offset..word_offset) |i| {
                                 line_buffer.items[i] = line_buffer.items[i + killed_text.len];
@@ -357,10 +357,10 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                                 bytes_read = 0;
                                 continue;
                             }
-                            const prev = copy_stack.pop().?;
-                            try copy_stack.insert(outlive, 0, prev);
+                            const prev = kill_ring.popFront().?;
+                            try kill_ring.pushBack(outlive, prev);
 
-                            const next = copy_stack.getLast();
+                            const next = kill_ring.front().?;
 
                             const prev_start_index = col_offset - prev.len;
                             for (0..prev.len) |_| {
@@ -391,7 +391,7 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
 
                             const copy = line_buffer.items[col_offset..prev_col_offset];
                             const duped_buffer = try outlive.dupe(u8, copy);
-                            try copy_stack.append(outlive, duped_buffer);
+                            try kill_ring.pushFront(outlive, duped_buffer);
 
                             try line_buffer.replaceRange(
                                 outlive,
@@ -471,10 +471,11 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
 }
 
 pub fn free_copy(alloc: Allocator) void {
-    for (copy_stack.items) |entry| {
-        alloc.free(entry);
+    for (0..kill_ring.len) |i| {
+        alloc.free(kill_ring.at(i));
     }
-    copy_stack.clearAndFree(alloc);
+    kill_ring.deinit(alloc);
+    kill_ring = .empty;
 }
 
 fn log(alloc: Allocator, out: *std.Io.Writer, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
@@ -1077,7 +1078,7 @@ test "Kill text from cursor to end" {
     }
 
     try std.testing.expectEqualStrings("", line);
-    try std.testing.expectEqualStrings(copy_stack.items[0], "asdf;lkj");
+    try std.testing.expectEqualStrings(kill_ring.at(0), "asdf;lkj");
 }
 
 test "Kill text to end of word" {
@@ -1116,7 +1117,7 @@ test "Kill text to end of word" {
     }
 
     try std.testing.expectEqualStrings(";lkj", line);
-    try std.testing.expectEqualStrings(copy_stack.items[0], "asdf");
+    try std.testing.expectEqualStrings(kill_ring.at(0), "asdf");
 }
 
 test "Kill text to end of word while surrounded" {
@@ -1154,7 +1155,7 @@ test "Kill text to end of word while surrounded" {
     }
 
     try std.testing.expectEqualStrings("....", line);
-    try std.testing.expectEqualStrings(copy_stack.items[0], "1");
+    try std.testing.expectEqualStrings(kill_ring.at(0), "1");
 }
 
 test "Kill text to start of word" {
@@ -1191,7 +1192,7 @@ test "Kill text to start of word" {
     }
 
     try std.testing.expectEqualStrings("asdf;", line);
-    try std.testing.expectEqualStrings(copy_stack.items[0], "lkj");
+    try std.testing.expectEqualStrings(kill_ring.at(0), "lkj");
 }
 
 test "Kill text to previous whitespace" {
@@ -1228,7 +1229,7 @@ test "Kill text to previous whitespace" {
     }
 
     try std.testing.expectEqualStrings("asdf ", line);
-    try std.testing.expectEqualStrings(copy_stack.items[0], "lkj");
+    try std.testing.expectEqualStrings(kill_ring.at(0), "lkj");
 }
 
 test "Yank text" {
@@ -1269,7 +1270,7 @@ test "Yank text" {
     }
 
     try std.testing.expectEqualStrings("dfas", line);
-    try std.testing.expectEqual(1, copy_stack.items.len);
+    try std.testing.expectEqual(1, kill_ring.len);
 }
 
 test "Rotate kill-ring and yank text" {
@@ -1312,7 +1313,7 @@ test "Rotate kill-ring and yank text" {
     }
 
     try std.testing.expectEqualStrings("bb", line);
-    try std.testing.expectEqual(3, copy_stack.items.len);
+    try std.testing.expectEqual(3, kill_ring.len);
 }
 
 fn inputStdin(fd: c_int, input: []const u8) !void {
@@ -1333,5 +1334,6 @@ const Linux = @import("Linux.zig");
 const MacOs = @import("MacOS.zig");
 const Windows = @import("Windows.zig");
 const FreeBSD = @import("FreeBSD.zig");
+const Deque = @import("deque.zig").Deque;
 
 const unistd = @cImport(@cInclude("unistd.h"));
