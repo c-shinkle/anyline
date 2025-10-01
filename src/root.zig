@@ -1,8 +1,6 @@
 var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
-// var previous_in_buffer: [8]u8 = undefined;
-// var previous_len: usize = 0;
 
 const CTRL_A = 0x01;
 const CTRL_B = 0x02;
@@ -65,6 +63,9 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
     var col_offset: usize = 0;
     var line_buffer = std.ArrayListUnmanaged(u8).empty;
     var edit_stack = std.ArrayListUnmanaged([]const u8).empty;
+    var in_buffer: [8]u8 = undefined;
+    var bytes_read: usize = undefined;
+    var is_yankable = false;
 
     var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
@@ -92,12 +93,11 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
     try out.writeAll(prompt);
     try out.flush();
 
-    var in_buffer: [8]u8 = undefined;
-    var bytes_read: usize = undefined;
     while (true) : ({
         try out.flush();
-        // previous_in_buffer = in_buffer;
-        // previous_len = bytes_read;
+        is_yankable =
+            (bytes_read >= 1 and in_buffer[0] == CTRL_Y) or
+            (bytes_read >= 2 and in_buffer[0] == control_code.esc and in_buffer[1] == 'y');
     }) {
         bytes_read = try in.read(&in_buffer);
         std.debug.assert(bytes_read > 0);
@@ -190,7 +190,11 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                 try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_Y => {
-                if (copy_stack.items.len == 0) continue;
+                if (copy_stack.items.len == 0) {
+                    try out.writeByte(control_code.bel);
+                    bytes_read = 0;
+                    continue;
+                }
 
                 const copy = copy_stack.getLast();
                 try line_buffer.insertSlice(temp, col_offset, copy);
@@ -204,11 +208,6 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
             },
             control_code.esc => {
                 if (bytes_read == 1) continue;
-                // if (bytes_read > 4) {
-                //     const fmt = "Kitty protocol not supported: {s}";
-                //     try log(outlive, fmt, .{in_buffer[2..8]}, prompt.len + col_offset);
-                //     continue;
-                // }
 
                 const second_byte = in_buffer[1];
                 if ('[' == second_byte) {
@@ -353,7 +352,11 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                             try setCursorColumn(out, prompt.len + col_offset);
                         },
                         'y' => {
-                            // TODO prevent if prior call is not ctrl y or meta y
+                            if (!is_yankable) {
+                                try out.writeByte(control_code.bel);
+                                bytes_read = 0;
+                                continue;
+                            }
                             const prev = copy_stack.pop().?;
                             try copy_stack.insert(outlive, 0, prev);
 
