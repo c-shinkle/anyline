@@ -20,6 +20,9 @@ pub fn main() !void {
     }
 
     try anyline.write_history(outlive_allocator, path);
+
+    anyline.free_history(outlive_allocator);
+    anyline.free_copy(outlive_allocator);
 }
 
 const std = @import("std");

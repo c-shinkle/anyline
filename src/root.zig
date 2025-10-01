@@ -1,6 +1,8 @@
 var is_using_history = false;
 var history_entries = std.ArrayListUnmanaged([]const u8).empty;
 var copy_stack = std.ArrayListUnmanaged([]const u8).empty;
+// var previous_in_buffer: [8]u8 = undefined;
+// var previous_len: usize = 0;
 
 const CTRL_A = 0x01;
 const CTRL_B = 0x02;
@@ -90,9 +92,14 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
     try out.writeAll(prompt);
     try out.flush();
 
-    while (true) : (try out.flush()) {
-        var in_buffer: [8]u8 = undefined;
-        const bytes_read = try in.read(&in_buffer);
+    var in_buffer: [8]u8 = undefined;
+    var bytes_read: usize = undefined;
+    while (true) : ({
+        try out.flush();
+        // previous_in_buffer = in_buffer;
+        // previous_len = bytes_read;
+    }) {
+        bytes_read = try in.read(&in_buffer);
         std.debug.assert(bytes_read > 0);
 
         const first_byte = in_buffer[0];
@@ -183,9 +190,9 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                 try setCursorColumn(out, prompt.len + col_offset);
             },
             CTRL_Y => {
-                const copy = copy_stack.pop() orelse continue;
-                defer outlive.free(copy);
+                if (copy_stack.items.len == 0) continue;
 
+                const copy = copy_stack.getLast();
                 try line_buffer.insertSlice(temp, col_offset, copy);
                 try out.writeAll(line_buffer.items[col_offset..]);
                 col_offset += copy.len;
@@ -331,15 +338,12 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                                 word_offset += 1;
                             }
 
-                            const duped_buffer = try outlive.dupe(u8, line_buffer.items[col_offset..word_offset]);
-                            try copy_stack.append(outlive, duped_buffer);
+                            const killed_text = try outlive.dupe(u8, line_buffer.items[col_offset..word_offset]);
+                            try copy_stack.append(outlive, killed_text);
 
-                            try line_buffer.replaceRange(
-                                temp,
-                                col_offset,
-                                line_buffer.items.len - word_offset,
-                                line_buffer.items[word_offset..],
-                            );
+                            for (col_offset..word_offset) |i| {
+                                line_buffer.items[i] = line_buffer.items[i + killed_text.len];
+                            }
 
                             const new_len = line_buffer.items.len - (word_offset - col_offset);
                             line_buffer.shrinkRetainingCapacity(new_len);
@@ -349,15 +353,24 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
                             try setCursorColumn(out, prompt.len + col_offset);
                         },
                         'y' => {
-                            const first = copy_stack.pop() orelse continue;
-                            try copy_stack.insert(outlive, 0, first);
+                            // TODO prevent if prior call is not ctrl y or meta y
+                            const prev = copy_stack.pop().?;
+                            try copy_stack.insert(outlive, 0, prev);
 
-                            const copy = copy_stack.pop().?;
-                            defer outlive.free(copy);
+                            const next = copy_stack.getLast();
 
-                            try line_buffer.insertSlice(temp, col_offset, copy);
-                            try out.writeAll(line_buffer.items[col_offset..]);
-                            col_offset += copy.len;
+                            const prev_start_index = col_offset - prev.len;
+                            for (0..prev.len) |_| {
+                                _ = line_buffer.orderedRemove(prev_start_index);
+                            }
+                            try line_buffer.insertSlice(temp, prev_start_index, next);
+
+                            col_offset = col_offset - prev.len + next.len;
+
+                            try setCursorColumn(out, prompt.len);
+                            try clearFromCursorToLineEnd(out);
+                            try out.writeAll(line_buffer.items);
+                            try setCursorColumn(out, prompt.len + col_offset);
                         },
                         control_code.del => {
                             const prev_col_offset = @min(col_offset + 1, line_buffer.items.len);
@@ -454,6 +467,13 @@ fn helper(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.f
     return try outlive.dupe(u8, line_buffer.items);
 }
 
+pub fn free_copy(alloc: Allocator) void {
+    for (copy_stack.items) |entry| {
+        alloc.free(entry);
+    }
+    copy_stack.clearAndFree(alloc);
+}
+
 fn log(alloc: Allocator, out: *std.Io.Writer, comptime fmt: []const u8, args: anytype, prev_col: usize) !void {
     if (!(builtin.mode == .Debug)) return;
 
@@ -490,7 +510,10 @@ pub fn add_history(alloc: Allocator, line: []const u8) AddHistoryError!void {
 }
 
 pub fn write_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) WriteHistoryError!void {
-    defer free_history(alloc);
+    defer {
+        free_history(alloc);
+        free_copy(alloc);
+    }
     const file = if (maybe_absolute_path) |absolute_path|
         try std.fs.openFileAbsolute(absolute_path, std.fs.File.OpenFlags{ .mode = .write_only })
     else
@@ -503,7 +526,7 @@ pub fn write_history(alloc: Allocator, maybe_absolute_path: ?[]const u8) WriteHi
     try file.writeAll(all_entries);
 }
 
-fn free_history(alloc: Allocator) void {
+pub fn free_history(alloc: Allocator) void {
     for (history_entries.items) |entry| {
         alloc.free(entry);
     }
@@ -1013,6 +1036,280 @@ test "Clear line" {
     }
 
     try std.testing.expectEqualStrings("asdf", line);
+}
+
+test "Kill text from cursor to end" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+    try inputStdin(fd, ";");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{CTRL_A});
+
+    try inputStdin(fd, &.{CTRL_K});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("", line);
+    try std.testing.expectEqualStrings(copy_stack.items[0], "asdf;lkj");
+}
+
+test "Kill text to end of word" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+    try inputStdin(fd, ";");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{CTRL_A});
+
+    try inputStdin(fd, &.{ control_code.esc, 'd' });
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings(";lkj", line);
+    try std.testing.expectEqualStrings(copy_stack.items[0], "asdf");
+}
+
+test "Kill text to end of word while surrounded" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, ".");
+    try inputStdin(fd, ".");
+    try inputStdin(fd, "1");
+    try inputStdin(fd, ".");
+    try inputStdin(fd, ".");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{ control_code.esc, 'd' });
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("....", line);
+    try std.testing.expectEqualStrings(copy_stack.items[0], "1");
+}
+
+test "Kill text to start of word" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+    try inputStdin(fd, ";");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{ control_code.esc, control_code.del });
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf;", line);
+    try std.testing.expectEqualStrings(copy_stack.items[0], "lkj");
+}
+
+test "Kill text to previous whitespace" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+    try inputStdin(fd, " ");
+    try inputStdin(fd, "l");
+    try inputStdin(fd, "k");
+    try inputStdin(fd, "j");
+
+    try inputStdin(fd, &.{CTRL_W});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("asdf ", line);
+    try std.testing.expectEqualStrings(copy_stack.items[0], "lkj");
+}
+
+test "Yank text" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "s");
+    try inputStdin(fd, "d");
+    try inputStdin(fd, "f");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{CTRL_K});
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_B});
+
+    try inputStdin(fd, &.{CTRL_Y});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("dfas", line);
+    try std.testing.expectEqual(1, copy_stack.items.len);
+}
+
+test "Rotate kill-ring and yank text" {
+    const outlive = std.testing.allocator;
+    var out_buf: [1024]u8 = undefined;
+    var out = std.Io.Writer.Discarding.init(&out_buf);
+
+    var pipe_fds: [2]c_int = undefined;
+    try std.testing.expect(-1 != unistd.pipe(&pipe_fds));
+    defer _ = unistd.close(pipe_fds[0]);
+    const fd = pipe_fds[1];
+
+    try inputStdin(fd, "a");
+    try inputStdin(fd, "b");
+    try inputStdin(fd, "c");
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_K});
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_K});
+
+    try inputStdin(fd, &.{CTRL_B});
+    try inputStdin(fd, &.{CTRL_K});
+
+    try inputStdin(fd, &.{CTRL_Y});
+    try inputStdin(fd, &.{ control_code.esc, 'y' });
+    try inputStdin(fd, &.{CTRL_Y});
+
+    try inputStdin(fd, "\n");
+
+    try std.testing.expect(-1 != unistd.close(fd));
+
+    const in = std.fs.File{ .handle = pipe_fds[0] };
+    const line = try helper(outlive, "", &out.writer, in);
+    defer {
+        outlive.free(line);
+        free_history(outlive);
+        free_copy(outlive);
+    }
+
+    try std.testing.expectEqualStrings("bb", line);
+    try std.testing.expectEqual(3, copy_stack.items.len);
 }
 
 fn inputStdin(fd: c_int, input: []const u8) !void {
